@@ -7,8 +7,9 @@ import cutlass
 import cutlass.cute as cute
 import torch
 from cutlass import Float32, Int32, Int64, const_expr
-from quack.activation import tanh
 from quack.cute_dsl_utils import torch2cute_dtype_map
+
+from mamba_ssm.ops.cute.mamba3.utils import tanh_approx
 
 
 _NUM_THREADS = 256
@@ -110,10 +111,14 @@ def _compile_angle_dt_fwd(
                     if const_expr(is_varlen):
                         dt_idx = Int64(head) * seqlen + token
                     dt_value = Float32(mDt[dt_idx])
-                    angle_base = ((Int64(batch_idx) * seqlen + token) * nheads + head) * dim + feature
+                    angle_base = (
+                        (Int64(batch_idx) * seqlen + token) * nheads + head
+                    ) * dim + feature
                     for item in cutlass.range_constexpr(_VEC_SIZE):
                         if feature + item < dim:
-                            angle = tanh(Float32(mAngle[angle_base + item])) * Float32(_PI)
+                            angle = tanh_approx(
+                                Float32(mAngle[angle_base + item])
+                            ) * Float32(_PI)
                             value = states[item] + angle * dt_value
                             quotient = value / Float32(_TWO_PI)
                             turns = Int32(quotient)
@@ -128,18 +133,28 @@ def _compile_angle_dt_fwd(
                         if feature + item < dim:
                             mFinal[final_base + item] = angle_dtype(states[item])
 
-    fake = lambda dtype: (
-        cute.runtime.make_fake_tensor(dtype, (cute.sym_int(),), stride=(1,), assumed_align=16)
-        if dtype is not None
-        else None
-    )
+    def fake(dtype):
+        return (
+            cute.runtime.make_fake_tensor(
+                dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+            )
+            if dtype is not None
+            else None
+        )
+
     return cute.compile(
         AngleDtFwd(),
-        fake(angle_dtype), fake(dt_dtype),
+        fake(angle_dtype),
+        fake(dt_dtype),
         fake(initial_dtype) if has_initial else None,
         fake(index_dtype) if is_varlen else None,
-        fake(angle_dtype), fake(angle_dtype) if return_state else None,
-        Int32(0), Int32(0), Int32(0), Int32(0), Int32(0),
+        fake(angle_dtype),
+        fake(angle_dtype) if return_state else None,
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
         cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
         options="--enable-tvm-ffi",
     )
@@ -173,7 +188,8 @@ def angle_dt_fwd_cute(
         else None
     )
     compiled = _compile_angle_dt_fwd(
-        torch2cute_dtype_map[angle.dtype], torch2cute_dtype_map[dt.dtype],
+        torch2cute_dtype_map[angle.dtype],
+        torch2cute_dtype_map[dt.dtype],
         torch2cute_dtype_map[init_state.dtype] if init_state is not None else None,
         torch2cute_dtype_map[cu_seqlens.dtype] if is_varlen else None,
         has_initial=init_state is not None,
@@ -181,10 +197,17 @@ def angle_dt_fwd_cute(
         is_varlen=is_varlen,
     )
     compiled(
-        angle.view(-1), dt.view(-1), init_state.view(-1) if init_state is not None else None,
-        cu_seqlens.view(-1) if is_varlen else None, out.view(-1),
+        angle.view(-1),
+        dt.view(-1),
+        init_state.view(-1) if init_state is not None else None,
+        cu_seqlens.view(-1) if is_varlen else None,
+        out.view(-1),
         final.view(-1) if final is not None else None,
-        batch, seqlen, nheads, dim, num_sequences,
+        batch,
+        seqlen,
+        nheads,
+        dim,
+        num_sequences,
     )
     return (out, final) if return_output_state else out
 

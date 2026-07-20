@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 59,
-    "present_unverified": 8,
+    "missing": 52,
+    "present_unverified": 15,
     "promoted": 2
   },
   "routes": [
@@ -40,9 +40,9 @@
     {
       "group": "shared",
       "id": "triton.softplus.softplus",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/softplus.py:softplus",
       "source": "mamba_ssm/ops/triton/softplus.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "softplus"
     },
     {
@@ -328,49 +328,49 @@
     {
       "group": "shared",
       "id": "triton.mamba3.utils.cos_approx",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:cos_approx",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "cos_approx"
     },
     {
       "group": "shared",
       "id": "triton.mamba3.utils.sin_approx",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:sin_approx",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "sin_approx"
     },
     {
       "group": "shared",
       "id": "triton.mamba3.utils.tanh_approx",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:tanh_approx",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "tanh_approx"
     },
     {
       "group": "shared",
       "id": "triton.mamba3.utils.sech2_approx",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:sech2_approx",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "sech2_approx"
     },
     {
       "group": "shared",
       "id": "triton.mamba3.utils.sigmoid_approx",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:sigmoid_approx",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "sigmoid_approx"
     },
     {
       "group": "shared",
       "id": "triton.mamba3.utils.silu",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:silu",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "silu"
     },
     {

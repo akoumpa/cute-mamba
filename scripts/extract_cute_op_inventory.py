@@ -184,6 +184,10 @@ SURFACE = [
 
 
 CUTE_ROUTES = {
+    "triton.softplus.softplus": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/softplus.py:softplus",
+    },
     "triton.k_activations._swiglu_fwd": {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/activations.py:_swiglu_fwd",
@@ -219,6 +223,20 @@ CUTE_ROUTES = {
     "triton.mamba3.angle_dt.angle_dt_fwd": {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/mamba3/angle_dt.py:angle_dt_fwd_cute",
+    },
+    **{
+        f"triton.mamba3.utils.{symbol}": {
+            "status": "present_unverified",
+            "implementation": f"mamba_ssm/ops/cute/mamba3/utils.py:{symbol}",
+        }
+        for symbol in (
+            "cos_approx",
+            "sin_approx",
+            "tanh_approx",
+            "sech2_approx",
+            "sigmoid_approx",
+            "silu",
+        )
     },
     "cute.mamba3.mamba3_step_fn.mamba3_step_fn": {
         "status": "promoted",
