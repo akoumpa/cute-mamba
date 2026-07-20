@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 45,
-    "present_unverified": 22,
+    "missing": 44,
+    "present_unverified": 23,
     "promoted": 2
   },
   "routes": [
@@ -208,9 +208,9 @@
     {
       "group": "ssd",
       "id": "triton.ssd_chunk_state._chunk_state_bwd_dx",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/ssd_chunk_state.py:chunk_state_bwd_dx_cute",
       "source": "mamba_ssm/ops/triton/ssd_chunk_state.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "_chunk_state_bwd_dx"
     },
     {
