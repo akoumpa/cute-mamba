@@ -510,4 +510,191 @@ def chunk_scan_bwd_dz_cute(
     return (*result, outz) if recompute_output else result
 
 
-__all__ = ["chunk_scan_bwd_dz_cute", "chunk_scan_fwd_cute"]
+@cache
+def _compile_chunk_scan_bwd_dstates(
+    c_dtype, da_dtype, dout_dtype, index_dtype, output_dtype, *, has_seq_idx: bool
+):
+    class ChunkScanBwdDStates:
+        @cute.jit
+        def __call__(
+            self,
+            mC: cute.Tensor,
+            mDA: cute.Tensor,
+            mDOut: cute.Tensor,
+            mSeqIdx: cute.Tensor | None,
+            mDStates: cute.Tensor,
+            count: Int64,
+            seqlen: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            dstate: Int32,
+            stream: cuda.CUstream,
+        ):
+            self.kernel(
+                mC,
+                mDA,
+                mDOut,
+                mSeqIdx,
+                mDStates,
+                count,
+                seqlen,
+                nheads,
+                ngroups,
+                nchunks,
+                chunk_size,
+                headdim,
+                dstate,
+            ).launch(
+                grid=[cute.ceil_div(count, _NUM_THREADS), 1, 1],
+                block=[_NUM_THREADS, 1, 1],
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(
+            self,
+            mC: cute.Tensor,
+            mDA: cute.Tensor,
+            mDOut: cute.Tensor,
+            mSeqIdx: cute.Tensor | None,
+            mDStates: cute.Tensor,
+            count: Int64,
+            seqlen: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            dstate: Int32,
+        ):
+            tidx, _, _ = cute.arch.thread_idx()
+            block, _, _ = cute.arch.block_idx()
+            linear = Int64(block) * _NUM_THREADS + tidx
+            if linear < count:
+                state_feature = Int32(linear % dstate)
+                outer = linear // dstate
+                feature = Int32(outer % headdim)
+                outer = outer // headdim
+                head = Int32(outer % nheads)
+                outer = outer // nheads
+                chunk = Int32(outer % nchunks)
+                batch_idx = Int32(outer // nchunks)
+                group = head // (nheads // ngroups)
+                chunk_start = chunk * chunk_size
+                chunk_end = min(chunk_start + chunk_size, seqlen)
+                prev_seq = Int32(0)
+                if const_expr(has_seq_idx):
+                    if chunk > 0:
+                        prev_seq = Int32(
+                            mSeqIdx[Int64(batch_idx) * seqlen + chunk_start - 1]
+                        )
+                da_base = (
+                    (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                ) * chunk_size
+                value = Float32(0.0)
+                for token in cutlass.range(chunk_start, chunk_end, 1, unroll=1):
+                    use_token = True
+                    if const_expr(has_seq_idx):
+                        use_token = (
+                            Int32(mSeqIdx[Int64(batch_idx) * seqlen + token])
+                            == prev_seq
+                        )
+                    if use_token:
+                        pos = token - chunk_start
+                        scale = cute.math.exp2(
+                            Float32(mDA[da_base + pos]) * Float32(_LOG2E),
+                            fastmath=True,
+                        )
+                        c_idx = (
+                            (Int64(batch_idx) * seqlen + token) * ngroups + group
+                        ) * dstate + state_feature
+                        dout_idx = (
+                            (Int64(batch_idx) * seqlen + token) * nheads + head
+                        ) * headdim + feature
+                        value += Float32(mC[c_idx]) * Float32(mDOut[dout_idx]) * scale
+                mDStates[linear] = output_dtype(value)
+
+    def fake(dtype):
+        return (
+            cute.runtime.make_fake_tensor(
+                dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+            )
+            if dtype is not None
+            else None
+        )
+
+    return cute.compile(
+        ChunkScanBwdDStates(),
+        fake(c_dtype),
+        fake(da_dtype),
+        fake(dout_dtype),
+        fake(index_dtype) if has_seq_idx else None,
+        fake(output_dtype),
+        Int64(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+        options="--enable-tvm-ffi",
+    )
+
+
+def chunk_scan_bwd_dstates_cute(C, dA_cumsum, dout, seq_idx=None, dtype=None):
+    batch, seqlen, nheads, headdim = dout.shape
+    _, _, nchunks, chunk_size = dA_cumsum.shape
+    _, _, ngroups, dstate = C.shape
+    output_dtype = C.dtype if dtype is None else dtype
+    tensors = (C, dA_cumsum, dout, seq_idx)
+    if nheads % ngroups != 0 or any(
+        t is not None and (not t.is_cuda or not t.is_contiguous()) for t in tensors
+    ):
+        from mamba_ssm.ops.triton.ssd_chunk_scan import _chunk_scan_bwd_dstates
+
+        return _chunk_scan_bwd_dstates(C, dA_cumsum, dout, seq_idx, dtype)
+    dstates = torch.empty(
+        batch,
+        nchunks,
+        nheads,
+        headdim,
+        dstate,
+        device=C.device,
+        dtype=output_dtype,
+    )
+    compiled = _compile_chunk_scan_bwd_dstates(
+        torch2cute_dtype_map[C.dtype],
+        torch2cute_dtype_map[dA_cumsum.dtype],
+        torch2cute_dtype_map[dout.dtype],
+        torch2cute_dtype_map[seq_idx.dtype] if seq_idx is not None else None,
+        torch2cute_dtype_map[output_dtype],
+        has_seq_idx=seq_idx is not None,
+    )
+    compiled(
+        C.view(-1),
+        dA_cumsum.view(-1),
+        dout.view(-1),
+        seq_idx.view(-1) if seq_idx is not None else None,
+        dstates.view(-1),
+        dstates.numel(),
+        seqlen,
+        nheads,
+        ngroups,
+        nchunks,
+        chunk_size,
+        headdim,
+        dstate,
+    )
+    return dstates
+
+
+__all__ = [
+    "chunk_scan_bwd_dstates_cute",
+    "chunk_scan_bwd_dz_cute",
+    "chunk_scan_fwd_cute",
+]
