@@ -1,8 +1,8 @@
 {
   "counts": {
-    "missing": 65,
+    "missing": 64,
     "present_unverified": 3,
-    "promoted": 1
+    "promoted": 2
   },
   "routes": [
     {
@@ -88,9 +88,9 @@
     {
       "group": "selective_scan",
       "id": "triton.selective_state_update.selective_state_update",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/selective_state_update.py:selective_state_update_cute",
       "source": "mamba_ssm/ops/triton/selective_state_update.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "selective_state_update"
     },
     {
@@ -554,7 +554,7 @@
       "id": "cute.mamba3.mamba3_step_fn.mamba3_step_fn",
       "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_step_fn.py:mamba3_step_fn",
       "source": "mamba_ssm/ops/cute/mamba3/mamba3_step_fn.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "mamba3_step_fn"
     }
   ],

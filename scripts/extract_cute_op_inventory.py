@@ -196,8 +196,12 @@ CUTE_ROUTES = {
         "status": "promoted",
         "implementation": "quack.rmsnorm:rmsnorm",
     },
-    "cute.mamba3.mamba3_step_fn.mamba3_step_fn": {
+    "triton.selective_state_update.selective_state_update": {
         "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/selective_state_update.py:selective_state_update_cute",
+    },
+    "cute.mamba3.mamba3_step_fn.mamba3_step_fn": {
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_step_fn.py:mamba3_step_fn",
     },
 }
