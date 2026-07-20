@@ -102,7 +102,9 @@ def _compile_state_passing_fwd(
 
                 seq = Int32(0)
                 for chunk in cutlass.range(0, nchunks, 1, unroll=1):
-                    state_base = ((batch_idx * nchunks + chunk) * nheads + head) * dim + feature
+                    state_base = (
+                        (batch_idx * nchunks + chunk) * nheads + head
+                    ) * dim + feature
                     for item in cutlass.range_constexpr(_VEC_SIZE):
                         if feature + item < dim:
                             mOut[state_base + item] = output_dtype(values[item])
@@ -120,19 +122,23 @@ def _compile_state_passing_fwd(
                         seq = seq_new
                     for item in cutlass.range_constexpr(_VEC_SIZE):
                         if feature + item < dim:
-                            values[item] = (
-                                scale * values[item] + Float32(mStates[state_base + item])
+                            values[item] = scale * values[item] + Float32(
+                                mStates[state_base + item]
                             )
 
                 for item in cutlass.range_constexpr(_VEC_SIZE):
                     if feature + item < dim:
                         mFinal[initial_base + item] = values[item]
 
-    fake = lambda dtype: (
-        cute.runtime.make_fake_tensor(dtype, (cute.sym_int(),), stride=(1,), assumed_align=16)
-        if dtype is not None
-        else None
-    )
+    def fake(dtype):
+        return (
+            cute.runtime.make_fake_tensor(
+                dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+            )
+            if dtype is not None
+            else None
+        )
+
     return cute.compile(
         StatePassingFwd(),
         fake(state_dtype),
@@ -173,12 +179,16 @@ def state_passing_fwd_cute(
         raise ValueError("CuTe state passing requires contiguous CUDA tensors")
 
     out_dtype = states.dtype if out_dtype is None else out_dtype
-    out = torch.empty((batch, nchunks, nheads, dim), device=states.device, dtype=out_dtype)
+    out = torch.empty(
+        (batch, nchunks, nheads, dim), device=states.device, dtype=out_dtype
+    )
     final = torch.empty((batch, nheads, dim), device=states.device, dtype=torch.float32)
     compiled = _compile_state_passing_fwd(
         torch2cute_dtype_map[states.dtype],
         torch2cute_dtype_map[dA_chunk_cumsum.dtype],
-        torch2cute_dtype_map[initial_states.dtype] if initial_states is not None else None,
+        torch2cute_dtype_map[initial_states.dtype]
+        if initial_states is not None
+        else None,
         torch2cute_dtype_map[out_dtype],
         torch2cute_dtype_map[seq_idx.dtype] if seq_idx is not None else None,
         has_initial=initial_states is not None,
@@ -299,15 +309,21 @@ def _compile_state_passing_bwd(
 
             for reverse_idx in cutlass.range(0, nchunks, 1, unroll=1):
                 chunk = nchunks - 1 - reverse_idx
-                state_idx = ((Int64(batch_idx) * nchunks + chunk) * nheads + head) * dim + feature
+                state_idx = (
+                    (Int64(batch_idx) * nchunks + chunk) * nheads + head
+                ) * dim + feature
                 if feature < dim:
                     mDStates[state_idx] = dstates_dtype(dstates)
                     if const_expr(convert_states):
-                        mStatesConverted[state_idx] = converted_dtype(Float32(mStates[state_idx]))
+                        mStatesConverted[state_idx] = converted_dtype(
+                            Float32(mStates[state_idx])
+                        )
 
                 if chunk > 0:
                     scale = cute.math.exp2(
-                        Float32(mDecay[(Int64(batch_idx) * nheads + head) * nchunks + chunk])
+                        Float32(
+                            mDecay[(Int64(batch_idx) * nheads + head) * nchunks + chunk]
+                        )
                         * Float32(_LOG2E),
                         fastmath=True,
                     )
@@ -328,14 +344,11 @@ def _compile_state_passing_bwd(
                     )
                     if cute.arch.warp_idx() == 0 and cute.arch.lane_idx() == 0:
                         partial_idx = (
-                            ((Int64(batch_idx) * nheads + head) * nchunks + chunk) * nblocks
-                            + feature_block
-                        )
+                            (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                        ) * nblocks + feature_block
                         mDDecayPartial[partial_idx] = total
                     if feature < dim:
-                        dstates = (
-                            scale * dstates + Float32(mDOut[state_idx])
-                        )
+                        dstates = scale * dstates + Float32(mDOut[state_idx])
 
             if const_expr(has_initial):
                 scale = cute.math.exp2(
@@ -346,7 +359,9 @@ def _compile_state_passing_bwd(
                 if const_expr(has_seq_idx):
                     if seq != Int32(0):
                         scale = Float32(0.0)
-                state0_idx = ((Int64(batch_idx) * nchunks) * nheads + head) * dim + feature
+                state0_idx = (
+                    (Int64(batch_idx) * nchunks) * nheads + head
+                ) * dim + feature
                 partial = Float32(0.0)
                 if feature < dim:
                     partial = Float32(mStates[state0_idx]) * dstates * scale
@@ -357,30 +372,46 @@ def _compile_state_passing_bwd(
                     reduction_buffer=reduction_buffer,
                 )
                 if cute.arch.warp_idx() == 0 and cute.arch.lane_idx() == 0:
-                    partial_idx = ((Int64(batch_idx) * nheads + head) * nchunks) * nblocks + feature_block
+                    partial_idx = (
+                        (Int64(batch_idx) * nheads + head) * nchunks
+                    ) * nblocks + feature_block
                     mDDecayPartial[partial_idx] = total
                 if feature < dim:
                     dstates = scale * dstates + Float32(mDOut[state0_idx])
                     mDInitial[outer_base + feature] = dstates_dtype(dstates)
             else:
                 if cute.arch.warp_idx() == 0 and cute.arch.lane_idx() == 0:
-                    partial_idx = ((Int64(batch_idx) * nheads + head) * nchunks) * nblocks + feature_block
+                    partial_idx = (
+                        (Int64(batch_idx) * nheads + head) * nchunks
+                    ) * nblocks + feature_block
                     mDDecayPartial[partial_idx] = Float32(0.0)
 
-    fake = lambda dtype: (
-        cute.runtime.make_fake_tensor(dtype, (cute.sym_int(),), stride=(1,), assumed_align=16)
-        if dtype is not None
-        else None
-    )
+    def fake(dtype):
+        return (
+            cute.runtime.make_fake_tensor(
+                dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+            )
+            if dtype is not None
+            else None
+        )
+
     return cute.compile(
         StatePassingBwd(),
-        fake(state_dtype), fake(decay_dtype), fake(dout_dtype),
+        fake(state_dtype),
+        fake(decay_dtype),
+        fake(dout_dtype),
         fake(final_dtype) if has_final else None,
         fake(index_dtype) if has_seq_idx else None,
-        fake(dstates_dtype), fake(Float32),
+        fake(dstates_dtype),
+        fake(Float32),
         fake(dstates_dtype) if has_initial else None,
         fake(converted_dtype) if convert_states else None,
-        Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
         cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
         options="--enable-tvm-ffi",
     )
@@ -411,25 +442,38 @@ def state_passing_bwd_cute(
         else None
     )
     nblocks = (dim + _NUM_THREADS - 1) // _NUM_THREADS
-    partial = torch.empty(batch, nheads, nchunks, nblocks, device=states.device, dtype=torch.float32)
+    partial = torch.empty(
+        batch, nheads, nchunks, nblocks, device=states.device, dtype=torch.float32
+    )
     compiled = _compile_state_passing_bwd(
-        torch2cute_dtype_map[states.dtype], torch2cute_dtype_map[dA_chunk_cumsum.dtype],
+        torch2cute_dtype_map[states.dtype],
+        torch2cute_dtype_map[dA_chunk_cumsum.dtype],
         torch2cute_dtype_map[dout.dtype],
-        torch2cute_dtype_map[dfinal_states.dtype] if dfinal_states is not None else None,
+        torch2cute_dtype_map[dfinal_states.dtype]
+        if dfinal_states is not None
+        else None,
         torch2cute_dtype_map[dstates_dtype],
         torch2cute_dtype_map[dstates_dtype] if converted is not None else None,
         torch2cute_dtype_map[seq_idx.dtype] if seq_idx is not None else None,
-        has_final=dfinal_states is not None, has_initial=bool(has_initial_states),
-        convert_states=converted is not None, has_seq_idx=seq_idx is not None,
+        has_final=dfinal_states is not None,
+        has_initial=bool(has_initial_states),
+        convert_states=converted is not None,
+        has_seq_idx=seq_idx is not None,
     )
     compiled(
-        states.view(-1), dA_chunk_cumsum.view(-1), dout.view(-1),
+        states.view(-1),
+        dA_chunk_cumsum.view(-1),
+        dout.view(-1),
         dfinal_states.view(-1) if dfinal_states is not None else None,
         seq_idx.view(-1) if seq_idx is not None else None,
-        dstates.view(-1), partial.view(-1),
+        dstates.view(-1),
+        partial.view(-1),
         dinitial.view(-1) if dinitial is not None else None,
         converted.view(-1) if converted is not None else None,
-        batch, nchunks, nheads, dim,
+        batch,
+        nchunks,
+        nheads,
+        dim,
         seq_idx.shape[1] if seq_idx is not None else 0,
         chunk_size if seq_idx is not None else 0,
     )
@@ -440,4 +484,38 @@ def state_passing_bwd_cute(
     return result if states_dtype is None else (*result, converted)
 
 
-__all__ = ["state_passing_bwd_cute", "state_passing_fwd_cute"]
+class StatePassingCuteFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, states, dA_chunk_cumsum, initial_states=None):
+        if states.stride(-1) != 1:
+            states = states.contiguous()
+        out, final = state_passing_fwd_cute(states, dA_chunk_cumsum, initial_states)
+        ctx.save_for_backward(out, dA_chunk_cumsum)
+        ctx.has_initial_states = initial_states is not None
+        return out, final
+
+    @staticmethod
+    def backward(ctx, dout, dfinal_states):
+        out, dA_chunk_cumsum = ctx.saved_tensors
+        if dout.stride(-1) != 1:
+            dout = dout.contiguous()
+        dstates, ddecay, dinitial = state_passing_bwd_cute(
+            out,
+            dA_chunk_cumsum,
+            dout,
+            dfinal_states=dfinal_states,
+            has_initial_states=ctx.has_initial_states,
+        )
+        return dstates, ddecay, dinitial
+
+
+def state_passing_cute(states, dA_chunk_cumsum, initial_states=None):
+    return StatePassingCuteFn.apply(states, dA_chunk_cumsum, initial_states)
+
+
+__all__ = [
+    "StatePassingCuteFn",
+    "state_passing_bwd_cute",
+    "state_passing_cute",
+    "state_passing_fwd_cute",
+]
