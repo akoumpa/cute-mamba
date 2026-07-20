@@ -10,6 +10,7 @@ import cutlass
 import cutlass.cute as cute
 import torch
 from cutlass import Float32, Int32, Int64, const_expr
+from quack.activation import sigmoid
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
 
@@ -161,19 +162,21 @@ def _compile_chunk_cumsum_fwd(
 
                 if head < nheads and pos < chunk_size:
                     out_idx = (
-                        ((Int64(batch_idx) * nheads + head) * nchunks + chunk)
-                        * chunk_size
-                        + pos
-                    )
+                        (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                    ) * chunk_size + pos
                     mDtOut[out_idx] = dt
                     mDACumsum[out_idx] = value
                 carry = cute.arch.shuffle_sync(value, 31)
 
-    fake = lambda dtype: (
-        cute.runtime.make_fake_tensor(dtype, (cute.sym_int(),), stride=(1,), assumed_align=16)
-        if dtype is not None
-        else None
-    )
+    def fake(dtype):
+        return (
+            cute.runtime.make_fake_tensor(
+                dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+            )
+            if dtype is not None
+            else None
+        )
+
     return cute.compile(
         ChunkCumsumFwd(),
         fake(dt_dtype),
@@ -250,4 +253,250 @@ def chunk_cumsum_fwd_cute(
     return dA_cumsum, dt_out
 
 
-__all__ = ["chunk_cumsum_fwd_cute"]
+@cache
+def _compile_chunk_cumsum_bwd(
+    ddA_dtype,
+    ddt_out_dtype,
+    dt_dtype,
+    a_dtype,
+    bias_dtype,
+    chunk_size: int,
+    *,
+    has_bias: bool,
+    dt_softplus: bool,
+):
+    items_per_lane = math.ceil(chunk_size / 32)
+
+    class ChunkCumsumBwd:
+        @cute.jit
+        def __call__(
+            self,
+            mDDA: cute.Tensor,
+            mDDtOut: cute.Tensor,
+            mDt: cute.Tensor,
+            mA: cute.Tensor,
+            mBias: cute.Tensor | None,
+            mDDt: cute.Tensor,
+            mDAPartial: cute.Tensor,
+            mDBiasPartial: cute.Tensor | None,
+            mDA: cute.Tensor,
+            mDBias: cute.Tensor | None,
+            batch: Int32,
+            seqlen: Int32,
+            nheads: Int32,
+            nchunks: Int32,
+            dt_min: Float32,
+            dt_max: Float32,
+            stream: cuda.CUstream,
+        ):
+            self.kernel(
+                mDDA,
+                mDDtOut,
+                mDt,
+                mA,
+                mBias,
+                mDDt,
+                mDAPartial,
+                mDBiasPartial,
+                seqlen,
+                nheads,
+                nchunks,
+                dt_min,
+                dt_max,
+            ).launch(
+                grid=[batch, nchunks, cute.ceil_div(nheads, _NUM_WARPS)],
+                block=[_NUM_THREADS, 1, 1],
+                stream=stream,
+            )
+            self.finalize_kernel(
+                mDAPartial, mDBiasPartial, mDA, mDBias, batch * nchunks, nheads
+            ).launch(
+                grid=[cute.ceil_div(nheads, _NUM_THREADS), 1, 1],
+                block=[_NUM_THREADS, 1, 1],
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(
+            self,
+            mDDA: cute.Tensor,
+            mDDtOut: cute.Tensor,
+            mDt: cute.Tensor,
+            mA: cute.Tensor,
+            mBias: cute.Tensor | None,
+            mDDt: cute.Tensor,
+            mDAPartial: cute.Tensor,
+            mDBiasPartial: cute.Tensor | None,
+            seqlen: Int32,
+            nheads: Int32,
+            nchunks: Int32,
+            dt_min: Float32,
+            dt_max: Float32,
+        ):
+            tidx, _, _ = cute.arch.thread_idx()
+            batch_idx, chunk, head_block = cute.arch.block_idx()
+            lane = tidx % 32
+            warp = tidx // 32
+            head = head_block * _NUM_WARPS + warp
+            dA_sum = Float32(0.0)
+            dbias_sum = Float32(0.0)
+            if head < nheads:
+                a = Float32(mA[head])
+                bias = Float32(mBias[head]) if const_expr(has_bias) else Float32(0.0)
+                for item in cutlass.range_constexpr(items_per_lane):
+                    pos = item * 32 + lane
+                    token = chunk * chunk_size + pos
+                    if pos < chunk_size and token < seqlen:
+                        chunk_idx = (
+                            (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                        ) * chunk_size + pos
+                        dt_idx = (Int64(batch_idx) * seqlen + token) * nheads + head
+                        ddA = Float32(mDDA[chunk_idx])
+                        ddt = ddA * a + Float32(mDDtOut[chunk_idx])
+                        dt = Float32(mDt[dt_idx]) + bias
+                        dt_pre_softplus = dt
+                        if const_expr(dt_softplus):
+                            dt = _softplus(dt)
+                        if dt < dt_min:
+                            dt = dt_min
+                            ddt = Float32(0.0)
+                        if dt > dt_max:
+                            dt = dt_max
+                            ddt = Float32(0.0)
+                        if const_expr(dt_softplus):
+                            if dt_pre_softplus <= Float32(20.0):
+                                ddt *= sigmoid(dt_pre_softplus)
+                        mDDt[dt_idx] = dt_dtype(ddt)
+                        dA_sum += ddA * dt
+                        dbias_sum += ddt
+
+            for offset in (16, 8, 4, 2, 1):
+                dA_sum += cute.arch.shuffle_sync_down(dA_sum, offset)
+                dbias_sum += cute.arch.shuffle_sync_down(dbias_sum, offset)
+            if lane == 0 and head < nheads:
+                partial_idx = (Int64(batch_idx) * nchunks + chunk) * nheads + head
+                mDAPartial[partial_idx] = dA_sum
+                if const_expr(has_bias):
+                    mDBiasPartial[partial_idx] = dbias_sum
+
+        @cute.kernel
+        def finalize_kernel(
+            self,
+            mDAPartial: cute.Tensor,
+            mDBiasPartial: cute.Tensor | None,
+            mDA: cute.Tensor,
+            mDBias: cute.Tensor | None,
+            outer: Int32,
+            nheads: Int32,
+        ):
+            tidx, _, _ = cute.arch.thread_idx()
+            block, _, _ = cute.arch.block_idx()
+            head = block * _NUM_THREADS + tidx
+            if head < nheads:
+                dA = Float32(0.0)
+                dbias = Float32(0.0)
+                for idx in cutlass.range(0, outer, 1, unroll=1):
+                    partial_idx = Int64(idx) * nheads + head
+                    dA += Float32(mDAPartial[partial_idx])
+                    if const_expr(has_bias):
+                        dbias += Float32(mDBiasPartial[partial_idx])
+                mDA[head] = dA
+                if const_expr(has_bias):
+                    mDBias[head] = dbias
+
+    def fake(dtype):
+        return (
+            cute.runtime.make_fake_tensor(
+                dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+            )
+            if dtype is not None
+            else None
+        )
+
+    return cute.compile(
+        ChunkCumsumBwd(),
+        fake(ddA_dtype),
+        fake(ddt_out_dtype),
+        fake(dt_dtype),
+        fake(a_dtype),
+        fake(bias_dtype) if has_bias else None,
+        fake(dt_dtype),
+        fake(Float32),
+        fake(Float32) if has_bias else None,
+        fake(Float32),
+        fake(Float32) if has_bias else None,
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Float32(0.0),
+        Float32(0.0),
+        cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+        options="--enable-tvm-ffi",
+    )
+
+
+def chunk_cumsum_bwd_cute(
+    ddA,
+    ddt_out,
+    dt,
+    A,
+    dt_bias=None,
+    dt_softplus=False,
+    dt_limit=(0.0, float("inf")),
+    ddt=None,
+):
+    batch, seqlen, nheads = dt.shape
+    _, _, nchunks, chunk_size = ddA.shape
+    if ddA.shape != (batch, nheads, nchunks, chunk_size) or ddt_out.shape != ddA.shape:
+        raise ValueError("CuTe chunk cumsum gradients have incompatible shapes")
+    if A.shape != (nheads,) or (dt_bias is not None and dt_bias.shape != (nheads,)):
+        raise ValueError("CuTe chunk cumsum parameters have incompatible shapes")
+    tensors = (ddA, ddt_out, dt, A, dt_bias, ddt)
+    if any(t is not None and (not t.is_cuda or not t.is_contiguous()) for t in tensors):
+        from mamba_ssm.ops.triton.ssd_chunk_state import _chunk_cumsum_bwd
+
+        return _chunk_cumsum_bwd(
+            ddA, ddt_out, dt, A, dt_bias, dt_softplus, dt_limit, ddt
+        )
+    if ddt is None:
+        ddt = torch.empty_like(dt)
+    outer = batch * nchunks
+    dA_partial = torch.empty(outer, nheads, device=dt.device, dtype=torch.float32)
+    dbias_partial = torch.empty_like(dA_partial) if dt_bias is not None else None
+    dA = torch.empty_like(A, dtype=torch.float32)
+    dbias = (
+        torch.empty_like(dt_bias, dtype=torch.float32) if dt_bias is not None else None
+    )
+    compiled = _compile_chunk_cumsum_bwd(
+        torch2cute_dtype_map[ddA.dtype],
+        torch2cute_dtype_map[ddt_out.dtype],
+        torch2cute_dtype_map[dt.dtype],
+        torch2cute_dtype_map[A.dtype],
+        torch2cute_dtype_map[dt_bias.dtype] if dt_bias is not None else None,
+        chunk_size,
+        has_bias=dt_bias is not None,
+        dt_softplus=dt_softplus,
+    )
+    compiled(
+        ddA.view(-1),
+        ddt_out.view(-1),
+        dt.view(-1),
+        A.view(-1),
+        dt_bias.view(-1) if dt_bias is not None else None,
+        ddt.view(-1),
+        dA_partial.view(-1),
+        dbias_partial.view(-1) if dbias_partial is not None else None,
+        dA.view(-1),
+        dbias.view(-1) if dbias is not None else None,
+        batch,
+        seqlen,
+        nheads,
+        nchunks,
+        dt_limit[0],
+        dt_limit[1],
+    )
+    return ddt, dA, dbias
+
+
+__all__ = ["chunk_cumsum_bwd_cute", "chunk_cumsum_fwd_cute"]
