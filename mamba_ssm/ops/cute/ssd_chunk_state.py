@@ -1268,10 +1268,18 @@ def chunk_state_bwd_db_cute(x, dt, dA_cumsum, dstates, seq_idx=None, B=None, ngr
     return dB if B is None else (dB, ddA)
 
 
+def chunk_state_bwd_ddAcs_stable_cute(B, x, dt, dA_cumsum, dstates, seq_idx=None):
+    _, ddA_cumsum = chunk_state_bwd_db_cute(
+        x, dt, dA_cumsum, dstates, seq_idx, B, B.shape[2]
+    )
+    return ddA_cumsum
+
+
 __all__ = [
     "chunk_cumsum_bwd_cute",
     "chunk_cumsum_fwd_cute",
     "chunk_state_bwd_db_cute",
+    "chunk_state_bwd_ddAcs_stable_cute",
     "chunk_state_bwd_dx_cute",
     "chunk_state_fwd_cute",
 ]
