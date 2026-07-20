@@ -292,6 +292,26 @@ CUTE_ROUTES = {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/ssd_state_passing.py:state_passing_cute",
     },
+    "triton.ssd_combined._chunk_scan_chunk_state_bwd_dx": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/ssd_combined.py:chunk_scan_chunk_state_bwd_dx_cute",
+    },
+    "triton.ssd_combined.mamba_chunk_scan_combined": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_chunk_scan_combined_cute",
+    },
+    "triton.ssd_combined.mamba_chunk_scan": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_chunk_scan_cute",
+    },
+    "triton.ssd_combined.selective_scan_bwd": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/ssd_combined.py:selective_scan_bwd_cute",
+    },
+    "triton.ssd_combined.mamba_split_conv1d_scan_combined": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_split_conv1d_scan_combined_cute",
+    },
     "triton.mamba3.grouped_head_reduction.reduce_grouped_qk_grads": {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/mamba3/grouped_head_reduction.py:reduce_grouped_qk_grads_cute",

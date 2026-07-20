@@ -1192,7 +1192,8 @@ def chunk_scan_bwd_dx_cute(cb, x, dt, dA_cumsum, dout, D=None):
 
         return _chunk_scan_bwd_dx(cb, x, dt, dA_cumsum, dout, D)
     dx = torch.empty_like(x)
-    ddt = torch.empty_like(dt, dtype=torch.float32)
+    # The kernel only visits real sequence positions; padded tail entries are zero by API.
+    ddt = torch.zeros_like(dt, dtype=torch.float32)
     compiled = _compile_chunk_scan_bwd_dx(
         torch2cute_dtype_map[cb.dtype],
         torch2cute_dtype_map[x.dtype],
@@ -1694,6 +1695,10 @@ class ChunkScanCuteFn(torch.autograd.Function):
             batch, seqlen, nheads, _ = x.shape
             nchunks = dt.shape[2]
             ddA_cumsum = (out_no_d * dout.float()).sum(dim=-1)
+            if seqlen != nchunks * chunk_size:
+                ddA_cumsum = torch.nn.functional.pad(
+                    ddA_cumsum, (0, 0, 0, nchunks * chunk_size - seqlen)
+                )
             ddA_cumsum = ddA_cumsum.view(batch, nchunks, chunk_size, nheads).permute(
                 0, 3, 1, 2
             )

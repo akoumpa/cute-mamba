@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 31,
-    "present_unverified": 36,
+    "missing": 26,
+    "present_unverified": 41,
     "promoted": 2
   },
   "routes": [
@@ -272,41 +272,41 @@
     {
       "group": "ssd",
       "id": "triton.ssd_combined._chunk_scan_chunk_state_bwd_dx",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/ssd_combined.py:chunk_scan_chunk_state_bwd_dx_cute",
       "source": "mamba_ssm/ops/triton/ssd_combined.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "_chunk_scan_chunk_state_bwd_dx"
     },
     {
       "group": "ssd",
       "id": "triton.ssd_combined.mamba_chunk_scan_combined",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_chunk_scan_combined_cute",
       "source": "mamba_ssm/ops/triton/ssd_combined.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba_chunk_scan_combined"
     },
     {
       "group": "ssd",
       "id": "triton.ssd_combined.mamba_chunk_scan",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_chunk_scan_cute",
       "source": "mamba_ssm/ops/triton/ssd_combined.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba_chunk_scan"
     },
     {
       "group": "ssd",
       "id": "triton.ssd_combined.selective_scan_bwd",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/ssd_combined.py:selective_scan_bwd_cute",
       "source": "mamba_ssm/ops/triton/ssd_combined.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "selective_scan_bwd"
     },
     {
       "group": "ssd",
       "id": "triton.ssd_combined.mamba_split_conv1d_scan_combined",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_split_conv1d_scan_combined_cute",
       "source": "mamba_ssm/ops/triton/ssd_combined.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba_split_conv1d_scan_combined"
     },
     {
