@@ -17,10 +17,13 @@ except ImportError:
 from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import mamba3_siso_combined
 
 from mamba_ssm.ops.triton.mamba3.mamba3_mimo_rotary_step import apply_rotary_qk_inference_fwd
+from mamba_ssm.ops.cute.runtime import is_cute_dsl_available
 
 try:
+    if not is_cute_dsl_available():
+        raise ImportError("CuTe DSL is unavailable")
     from mamba_ssm.ops.cute.mamba3.mamba3_step_fn import mamba3_step_fn
-except ImportError:    
+except (ImportError, FileNotFoundError, OSError):
     mamba3_step_fn = None
 
 

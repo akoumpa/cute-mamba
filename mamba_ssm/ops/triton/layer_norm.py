@@ -16,6 +16,7 @@ from mamba_ssm.utils.torch import custom_bwd, custom_fwd
 import triton
 import triton.language as tl
 
+from mamba_ssm.ops.cute.runtime import is_cute_dsl_available
 from mamba_ssm.utils.determinism import autotune_configs
 
 
@@ -885,6 +886,72 @@ class LayerNormFn(torch.autograd.Function):
         )
 
 
+class HybridRMSNormFn(torch.autograd.Function):
+    """Triton forward with the faster CuTe backward for large training rows."""
+
+    @staticmethod
+    @custom_fwd
+    def forward(ctx, x, weight, bias, residual, eps, prenorm, residual_in_fp32):
+        x_shape = x.shape
+        x = x.reshape(-1, x.shape[-1])
+        if x.stride(-1) != 1:
+            x = x.contiguous()
+        if residual is not None:
+            residual = residual.reshape(-1, residual.shape[-1])
+            if residual.stride(-1) != 1:
+                residual = residual.contiguous()
+        residual_dtype = (
+            residual.dtype
+            if residual is not None
+            else (torch.float32 if residual_in_fp32 else None)
+        )
+        y, _, _, rstd, residual_out, *_ = _layer_norm_fwd(
+            x,
+            weight,
+            bias,
+            eps,
+            residual,
+            residual_dtype=residual_dtype,
+            is_rms_norm=True,
+        )
+        ctx.save_for_backward(x if residual is None else residual_out, weight, rstd)
+        ctx.x_shape = x_shape
+        ctx.has_bias = bias is not None
+        ctx.has_residual = residual is not None
+        ctx.prenorm = prenorm
+        y = y.reshape(x_shape)
+        if not prenorm:
+            return y
+        return y, residual_out.reshape(x_shape)
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, dout, *args):
+        from quack.rmsnorm import rmsnorm_bwd
+
+        x, weight, rstd = ctx.saved_tensors
+        dout = dout.reshape(-1, dout.shape[-1])
+        dresidual_out = args[0].reshape_as(x) if ctx.prenorm else None
+        dx, dw, db, dresidual = rmsnorm_bwd(
+            x,
+            weight,
+            dout,
+            rstd,
+            dresidual_out,
+            ctx.has_bias,
+            ctx.has_residual,
+        )
+        return (
+            dx.reshape(ctx.x_shape),
+            dw,
+            db,
+            dresidual.reshape(ctx.x_shape) if dresidual is not None else None,
+            None,
+            None,
+            None,
+        )
+
+
 def layer_norm_fn(
     x,
     weight,
@@ -934,6 +1001,49 @@ def rms_norm_fn(
     residual_in_fp32=False,
     return_dropout_mask=False,
 ):
+    supports_cute = (
+        dropout_p == 0.0
+        and x1 is None
+        and weight1 is None
+        and bias1 is None
+        and rowscale is None
+        and not return_dropout_mask
+        and (not prenorm or residual is not None)
+    )
+    needs_backward = torch.is_grad_enabled() and any(
+        tensor is not None and tensor.requires_grad for tensor in (x, weight, bias, residual)
+    )
+    cute_available = supports_cute and is_cute_dsl_available()
+    use_cute_fwd = cute_available and x.numel() <= 128 * 2048
+    if use_cute_fwd:
+        from quack.rmsnorm import rmsnorm
+
+        out_dtype = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else None
+        residual_dtype = (
+            residual.dtype
+            if residual is not None
+            else (torch.float32 if residual_in_fp32 else None)
+        )
+        return rmsnorm(
+            x,
+            weight,
+            bias=bias,
+            residual=residual,
+            out_dtype=out_dtype,
+            residual_dtype=residual_dtype,
+            eps=eps,
+            prenorm=prenorm,
+        )
+    if cute_available and needs_backward:
+        return HybridRMSNormFn.apply(
+            x,
+            weight,
+            bias,
+            residual,
+            eps,
+            prenorm,
+            residual_in_fp32,
+        )
     return LayerNormFn.apply(
         x,
         weight,

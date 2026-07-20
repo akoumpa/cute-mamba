@@ -1,0 +1,563 @@
+{
+  "counts": {
+    "missing": 65,
+    "present_unverified": 3,
+    "promoted": 1
+  },
+  "routes": [
+    {
+      "group": "selective_scan",
+      "id": "selective_scan_interface.selective_scan_fn",
+      "implementation": null,
+      "source": "mamba_ssm/ops/selective_scan_interface.py",
+      "status": "missing",
+      "symbol": "selective_scan_fn"
+    },
+    {
+      "group": "selective_scan",
+      "id": "selective_scan_interface.mamba_inner_fn",
+      "implementation": null,
+      "source": "mamba_ssm/ops/selective_scan_interface.py",
+      "status": "missing",
+      "symbol": "mamba_inner_fn"
+    },
+    {
+      "group": "activation",
+      "id": "triton.k_activations._swiglu_fwd",
+      "implementation": "mamba_ssm/ops/cute/activations.py:_swiglu_fwd",
+      "source": "mamba_ssm/ops/triton/k_activations.py",
+      "status": "present_unverified",
+      "symbol": "_swiglu_fwd"
+    },
+    {
+      "group": "activation",
+      "id": "triton.k_activations._swiglu_bwd",
+      "implementation": "mamba_ssm/ops/cute/activations.py:_swiglu_bwd",
+      "source": "mamba_ssm/ops/triton/k_activations.py",
+      "status": "present_unverified",
+      "symbol": "_swiglu_bwd"
+    },
+    {
+      "group": "shared",
+      "id": "triton.softplus.softplus",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/softplus.py",
+      "status": "missing",
+      "symbol": "softplus"
+    },
+    {
+      "group": "normalization",
+      "id": "triton.layer_norm.layer_norm_fn",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/layer_norm.py",
+      "status": "missing",
+      "symbol": "layer_norm_fn"
+    },
+    {
+      "group": "normalization",
+      "id": "triton.layer_norm.rms_norm_fn",
+      "implementation": "quack.rmsnorm:rmsnorm",
+      "source": "mamba_ssm/ops/triton/layer_norm.py",
+      "status": "promoted",
+      "symbol": "rms_norm_fn"
+    },
+    {
+      "group": "normalization",
+      "id": "triton.layer_norm.layer_norm_linear_fn",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/layer_norm.py",
+      "status": "missing",
+      "symbol": "layer_norm_linear_fn"
+    },
+    {
+      "group": "normalization",
+      "id": "triton.layernorm_gated.layernorm_fn",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/layernorm_gated.py",
+      "status": "missing",
+      "symbol": "layernorm_fn"
+    },
+    {
+      "group": "normalization",
+      "id": "triton.layernorm_gated.rmsnorm_fn",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/layernorm_gated.py",
+      "status": "missing",
+      "symbol": "rmsnorm_fn"
+    },
+    {
+      "group": "selective_scan",
+      "id": "triton.selective_state_update.selective_state_update",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/selective_state_update.py",
+      "status": "missing",
+      "symbol": "selective_state_update"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_bmm._bmm_chunk_fwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_bmm.py",
+      "status": "missing",
+      "symbol": "_bmm_chunk_fwd"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_bmm._bmm_chunk_bwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_bmm.py",
+      "status": "missing",
+      "symbol": "_bmm_chunk_bwd"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_scan._chunk_scan_fwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
+      "status": "missing",
+      "symbol": "_chunk_scan_fwd"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_scan._chunk_scan_bwd_dz",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
+      "status": "missing",
+      "symbol": "_chunk_scan_bwd_dz"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_scan._chunk_scan_bwd_dstates",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
+      "status": "missing",
+      "symbol": "_chunk_scan_bwd_dstates"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_scan._chunk_scan_bwd_dC",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
+      "status": "missing",
+      "symbol": "_chunk_scan_bwd_dC"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_scan._chunk_scan_bwd_dcb",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
+      "status": "missing",
+      "symbol": "_chunk_scan_bwd_dcb"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_scan._chunk_scan_bwd_dx",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
+      "status": "missing",
+      "symbol": "_chunk_scan_bwd_dx"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_scan._chunk_scan_bwd_ddAcs_stable",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
+      "status": "missing",
+      "symbol": "_chunk_scan_bwd_ddAcs_stable"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_scan._chunk_scan_bwd_ddAcs_prev",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
+      "status": "missing",
+      "symbol": "_chunk_scan_bwd_ddAcs_prev"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_scan.chunk_scan",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
+      "status": "missing",
+      "symbol": "chunk_scan"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_state._chunk_cumsum_fwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_state.py",
+      "status": "missing",
+      "symbol": "_chunk_cumsum_fwd"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_state._chunk_cumsum_bwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_state.py",
+      "status": "missing",
+      "symbol": "_chunk_cumsum_bwd"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_state._chunk_state_fwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_state.py",
+      "status": "missing",
+      "symbol": "_chunk_state_fwd"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_state._chunk_state_bwd_dx",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_state.py",
+      "status": "missing",
+      "symbol": "_chunk_state_bwd_dx"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_state._chunk_state_bwd_db",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_state.py",
+      "status": "missing",
+      "symbol": "_chunk_state_bwd_db"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_state._chunk_state_bwd_ddAcs_stable",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_state.py",
+      "status": "missing",
+      "symbol": "_chunk_state_bwd_ddAcs_stable"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_state.chunk_state_varlen",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_state.py",
+      "status": "missing",
+      "symbol": "chunk_state_varlen"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_chunk_state.chunk_state",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_chunk_state.py",
+      "status": "missing",
+      "symbol": "chunk_state"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_state_passing._state_passing_fwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_state_passing.py",
+      "status": "missing",
+      "symbol": "_state_passing_fwd"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_state_passing._state_passing_bwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_state_passing.py",
+      "status": "missing",
+      "symbol": "_state_passing_bwd"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_state_passing.state_passing",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_state_passing.py",
+      "status": "missing",
+      "symbol": "state_passing"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_combined._chunk_scan_chunk_state_bwd_dx",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_combined.py",
+      "status": "missing",
+      "symbol": "_chunk_scan_chunk_state_bwd_dx"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_combined.mamba_chunk_scan_combined",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_combined.py",
+      "status": "missing",
+      "symbol": "mamba_chunk_scan_combined"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_combined.mamba_chunk_scan",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_combined.py",
+      "status": "missing",
+      "symbol": "mamba_chunk_scan"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_combined.selective_scan_bwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_combined.py",
+      "status": "missing",
+      "symbol": "selective_scan_bwd"
+    },
+    {
+      "group": "ssd",
+      "id": "triton.ssd_combined.mamba_split_conv1d_scan_combined",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/ssd_combined.py",
+      "status": "missing",
+      "symbol": "mamba_split_conv1d_scan_combined"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.angle_dt.angle_dt_fwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/angle_dt.py",
+      "status": "missing",
+      "symbol": "angle_dt_fwd"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.angle_dt.angle_dt_bwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/angle_dt.py",
+      "status": "missing",
+      "symbol": "angle_dt_bwd"
+    },
+    {
+      "group": "shared",
+      "id": "triton.mamba3.utils.cos_approx",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/utils.py",
+      "status": "missing",
+      "symbol": "cos_approx"
+    },
+    {
+      "group": "shared",
+      "id": "triton.mamba3.utils.sin_approx",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/utils.py",
+      "status": "missing",
+      "symbol": "sin_approx"
+    },
+    {
+      "group": "shared",
+      "id": "triton.mamba3.utils.tanh_approx",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/utils.py",
+      "status": "missing",
+      "symbol": "tanh_approx"
+    },
+    {
+      "group": "shared",
+      "id": "triton.mamba3.utils.sech2_approx",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/utils.py",
+      "status": "missing",
+      "symbol": "sech2_approx"
+    },
+    {
+      "group": "shared",
+      "id": "triton.mamba3.utils.sigmoid_approx",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/utils.py",
+      "status": "missing",
+      "symbol": "sigmoid_approx"
+    },
+    {
+      "group": "shared",
+      "id": "triton.mamba3.utils.silu",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/utils.py",
+      "status": "missing",
+      "symbol": "silu"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.grouped_head_reduction.reduce_grouped_qk_grads",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/grouped_head_reduction.py",
+      "status": "missing",
+      "symbol": "reduce_grouped_qk_grads"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.grouped_head_reduction.reduce_grouped_qk_grads_and_bias_triton",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/grouped_head_reduction.py",
+      "status": "missing",
+      "symbol": "reduce_grouped_qk_grads_and_bias_triton"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_mimo_rotary_step.apply_rotary_qk_inference_fwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_rotary_step.py",
+      "status": "missing",
+      "symbol": "apply_rotary_qk_inference_fwd"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_mimo_utils.bwd_dadt_fused_triton",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
+      "status": "missing",
+      "symbol": "bwd_dadt_fused_triton"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_mimo_utils.bwd_dtrap_ddt_triton",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
+      "status": "missing",
+      "symbol": "bwd_dtrap_ddt_triton"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_mimo_utils.compute_dacs_segsum_triton_varlen",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
+      "status": "missing",
+      "symbol": "compute_dacs_segsum_triton_varlen"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_mimo_utils.compute_dacs_segsum_triton",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
+      "status": "missing",
+      "symbol": "compute_dacs_segsum_triton"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_mimo_utils.bwd_dadt_fused_triton_varlen",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
+      "status": "missing",
+      "symbol": "bwd_dadt_fused_triton_varlen"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_mimo_utils.bwd_dtrap_ddt_triton_varlen",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
+      "status": "missing",
+      "symbol": "bwd_dtrap_ddt_triton_varlen"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_siso_fwd.mamba3_siso_fwd",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_fwd.py",
+      "status": "missing",
+      "symbol": "mamba3_siso_fwd"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_siso_step.mamba3_siso_step",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_step.py",
+      "status": "missing",
+      "symbol": "mamba3_siso_step"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_siso_bwd.compute_dzdo",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
+      "status": "missing",
+      "symbol": "compute_dzdo"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_siso_bwd.compute_dqkv",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
+      "status": "missing",
+      "symbol": "compute_dqkv"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_siso_bwd.compute_dqktheta",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
+      "status": "missing",
+      "symbol": "compute_dqktheta"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_siso_bwd.apply_dk_state_post",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
+      "status": "missing",
+      "symbol": "apply_dk_state_post"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_siso_bwd.compute_ddt_dtrap_dinput_states",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
+      "status": "missing",
+      "symbol": "compute_ddt_dtrap_dinput_states"
+    },
+    {
+      "group": "mamba3",
+      "id": "triton.mamba3.mamba3_siso_combined.mamba3_siso_combined",
+      "implementation": null,
+      "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_combined.py",
+      "status": "missing",
+      "symbol": "mamba3_siso_combined"
+    },
+    {
+      "group": "mamba3",
+      "id": "tilelang.mamba3.mamba3_mimo_fwd.mamba_mimo_forward",
+      "implementation": null,
+      "source": "mamba_ssm/ops/tilelang/mamba3/mamba3_mimo_fwd.py",
+      "status": "missing",
+      "symbol": "mamba_mimo_forward"
+    },
+    {
+      "group": "mamba3",
+      "id": "tilelang.mamba3.mamba3_mimo_fwd_varlen.mamba_mimo_forward_varlen",
+      "implementation": null,
+      "source": "mamba_ssm/ops/tilelang/mamba3/mamba3_mimo_fwd_varlen.py",
+      "status": "missing",
+      "symbol": "mamba_mimo_forward_varlen"
+    },
+    {
+      "group": "mamba3",
+      "id": "tilelang.mamba3.mamba3_mimo_bwd.mamba_mimo_bwd_combined",
+      "implementation": null,
+      "source": "mamba_ssm/ops/tilelang/mamba3/mamba3_mimo_bwd.py",
+      "status": "missing",
+      "symbol": "mamba_mimo_bwd_combined"
+    },
+    {
+      "group": "mamba3",
+      "id": "tilelang.mamba3.mamba3_mimo_bwd_varlen.mamba_mimo_bwd_combined_varlen",
+      "implementation": null,
+      "source": "mamba_ssm/ops/tilelang/mamba3/mamba3_mimo_bwd_varlen.py",
+      "status": "missing",
+      "symbol": "mamba_mimo_bwd_combined_varlen"
+    },
+    {
+      "group": "mamba3",
+      "id": "tilelang.mamba3.mamba3_mimo.mamba3_mimo",
+      "implementation": null,
+      "source": "mamba_ssm/ops/tilelang/mamba3/mamba3_mimo.py",
+      "status": "missing",
+      "symbol": "mamba3_mimo"
+    },
+    {
+      "group": "mamba3",
+      "id": "cute.mamba3.mamba3_step_fn.mamba3_step_fn",
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_step_fn.py:mamba3_step_fn",
+      "source": "mamba_ssm/ops/cute/mamba3/mamba3_step_fn.py",
+      "status": "present_unverified",
+      "symbol": "mamba3_step_fn"
+    }
+  ],
+  "schema_version": 1,
+  "total_routes": 69
+}
