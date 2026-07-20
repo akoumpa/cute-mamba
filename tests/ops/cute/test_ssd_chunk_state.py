@@ -196,3 +196,38 @@ def test_chunk_state_bwd_ddAcs_stable_cute(dtype, has_seq_idx):
     actual = chunk_state_bwd_ddAcs_stable_cute(B, x, dt, dA, dstates, seq_idx)
     expected = _chunk_state_bwd_ddAcs_stable(B, x, dt, dA, dstates, seq_idx)
     torch.testing.assert_close(actual, expected, rtol=6e-3, atol=9e-3)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("states_in_fp32", [False, True])
+def test_chunk_state_cute_autograd(dtype, states_in_fp32):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_chunk_state import chunk_state_cute
+    from mamba_ssm.ops.triton.ssd_chunk_state import chunk_state
+
+    torch.manual_seed(6)
+    batch, seqlen, nheads, ngroups = 1, 47, 4, 2
+    headdim, dstate, chunk_size = 17, 19, 32
+    nchunks = (seqlen + chunk_size - 1) // chunk_size
+    tensors = (
+        torch.randn(batch, seqlen, ngroups, dstate, device="cuda", dtype=dtype),
+        torch.randn(batch, seqlen, nheads, headdim, device="cuda", dtype=dtype),
+        torch.rand(batch, nheads, nchunks, chunk_size, device="cuda"),
+        -torch.rand(batch, nheads, nchunks, chunk_size, device="cuda").cumsum(-1),
+    )
+    actual_inputs = tuple(t.detach().requires_grad_() for t in tensors)
+    expected_inputs = tuple(t.detach().clone().requires_grad_() for t in tensors)
+    actual = chunk_state_cute(*actual_inputs, states_in_fp32)
+    expected = chunk_state(*expected_inputs, states_in_fp32)
+    forward_rtol = 1e-2 if dtype == torch.bfloat16 else 5e-3
+    forward_atol = 4e-2 if dtype == torch.bfloat16 else 8e-3
+    torch.testing.assert_close(actual, expected, rtol=forward_rtol, atol=forward_atol)
+    grad = torch.randn_like(actual)
+    actual_grads = torch.autograd.grad(actual, actual_inputs, grad)
+    expected_grads = torch.autograd.grad(expected, expected_inputs, grad)
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads):
+        grad_rtol = 1.5e-2 if dtype == torch.bfloat16 else 7e-3
+        grad_atol = 8e-2 if dtype == torch.bfloat16 else 1e-2
+        torch.testing.assert_close(
+            actual_grad, expected_grad, rtol=grad_rtol, atol=grad_atol
+        )

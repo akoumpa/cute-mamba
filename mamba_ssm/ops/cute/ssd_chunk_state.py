@@ -1275,11 +1275,39 @@ def chunk_state_bwd_ddAcs_stable_cute(B, x, dt, dA_cumsum, dstates, seq_idx=None
     return ddA_cumsum
 
 
+class ChunkStateCuteFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, B, x, dt, dA_cumsum, states_in_fp32=True):
+        if B.stride(-1) != 1:
+            B = B.contiguous()
+        if x.stride(-1) != 1 and x.stride(1) != 1:
+            x = x.contiguous()
+        states = chunk_state_fwd_cute(
+            B, x, dt, dA_cumsum, states_in_fp32=states_in_fp32
+        )
+        ctx.save_for_backward(B, x, dt, dA_cumsum)
+        return states
+
+    @staticmethod
+    def backward(ctx, dstates):
+        B, x, dt, dA_cumsum = ctx.saved_tensors
+        if dstates.stride(-1) != 1:
+            dstates = dstates.contiguous()
+        dx, ddt, ddA_cumsum = chunk_state_bwd_dx_cute(B, x, dt, dA_cumsum, dstates)
+        dB = chunk_state_bwd_db_cute(x, dt, dA_cumsum, dstates, ngroups=B.shape[2])
+        return dB.to(B.dtype), dx, ddt, ddA_cumsum, None
+
+
+def chunk_state_cute(B, x, dt, dA_cumsum, states_in_fp32=True):
+    return ChunkStateCuteFn.apply(B, x, dt, dA_cumsum, states_in_fp32)
+
+
 __all__ = [
     "chunk_cumsum_bwd_cute",
     "chunk_cumsum_fwd_cute",
     "chunk_state_bwd_db_cute",
     "chunk_state_bwd_ddAcs_stable_cute",
     "chunk_state_bwd_dx_cute",
+    "chunk_state_cute",
     "chunk_state_fwd_cute",
 ]
