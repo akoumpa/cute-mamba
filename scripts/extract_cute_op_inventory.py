@@ -196,6 +196,14 @@ CUTE_ROUTES = {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/activations.py:_swiglu_bwd",
     },
+    "triton.ssd_bmm._bmm_chunk_fwd": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/ssd_bmm.py:_bmm_chunk_fwd_cute",
+    },
+    "triton.ssd_bmm._bmm_chunk_bwd": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/ssd_bmm.py:_bmm_chunk_bwd_cute",
+    },
     "triton.layer_norm.rms_norm_fn": {
         "status": "promoted",
         "implementation": "quack.rmsnorm:rmsnorm",
