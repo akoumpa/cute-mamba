@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 50,
-    "present_unverified": 17,
+    "missing": 49,
+    "present_unverified": 18,
     "promoted": 2
   },
   "routes": [
@@ -384,9 +384,9 @@
     {
       "group": "mamba3",
       "id": "triton.mamba3.grouped_head_reduction.reduce_grouped_qk_grads_and_bias_triton",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/grouped_head_reduction.py:reduce_grouped_qk_grads_and_bias_cute",
       "source": "mamba_ssm/ops/triton/mamba3/grouped_head_reduction.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "reduce_grouped_qk_grads_and_bias_triton"
     },
     {

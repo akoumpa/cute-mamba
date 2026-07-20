@@ -228,6 +228,10 @@ CUTE_ROUTES = {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/mamba3/grouped_head_reduction.py:reduce_grouped_qk_grads_cute",
     },
+    "triton.mamba3.grouped_head_reduction.reduce_grouped_qk_grads_and_bias_triton": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/grouped_head_reduction.py:reduce_grouped_qk_grads_and_bias_cute",
+    },
     "triton.mamba3.angle_dt.angle_dt_fwd": {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/mamba3/angle_dt.py:angle_dt_fwd_cute",
