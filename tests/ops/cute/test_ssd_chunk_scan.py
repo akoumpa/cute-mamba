@@ -185,3 +185,52 @@ def test_chunk_scan_bwd_dC_cute(dtype, has_seq_idx, has_c):
             actual_tensor = actual_tensor[valid]
             expected_tensor = expected_tensor[valid]
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("d_layout", ["none", "scalar", "vector"])
+def test_chunk_scan_bwd_dx_cute(dtype, d_layout):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_chunk_scan import chunk_scan_bwd_dx_cute
+    from mamba_ssm.ops.triton.ssd_chunk_scan import _chunk_scan_bwd_dx
+
+    torch.manual_seed(12)
+    batch, seqlen, nheads, ngroups = 2, 47, 4, 2
+    headdim, chunk_size = 17, 32
+    nchunks = (seqlen + chunk_size - 1) // chunk_size
+    x = torch.randn(batch, seqlen, nheads, headdim, device="cuda", dtype=dtype)
+    dout = torch.randn_like(x)
+    cb = torch.randn(
+        batch,
+        nchunks,
+        ngroups,
+        chunk_size,
+        chunk_size,
+        device="cuda",
+        dtype=dtype,
+    ).tril()
+    dt = torch.rand(batch, nheads, nchunks, chunk_size, device="cuda")
+    dA = -torch.rand_like(dt).cumsum(-1)
+    D = None
+    if d_layout == "scalar":
+        D = torch.randn(nheads, device="cuda")
+    elif d_layout == "vector":
+        D = torch.randn(nheads, headdim, device="cuda")
+    actual = chunk_scan_bwd_dx_cute(cb, x, dt, dA, dout, D)
+    expected = _chunk_scan_bwd_dx(cb, x, dt, dA, dout, D)
+    rtol = 1e-2 if dtype == torch.bfloat16 else 6e-3
+    atol = 5e-2 if dtype == torch.bfloat16 else 1e-2
+    for output_idx, (actual_tensor, expected_tensor) in enumerate(
+        zip(actual, expected)
+    ):
+        if output_idx == 1:
+            valid = (
+                torch.arange(nchunks * chunk_size, device="cuda").reshape(
+                    nchunks, chunk_size
+                )
+                < seqlen
+            )
+            valid = valid[None, None].expand(batch, nheads, -1, -1)
+            actual_tensor = actual_tensor[valid]
+            expected_tensor = expected_tensor[valid]
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)
