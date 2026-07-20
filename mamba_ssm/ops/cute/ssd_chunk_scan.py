@@ -1223,8 +1223,208 @@ def chunk_scan_bwd_dx_cute(cb, x, dt, dA_cumsum, dout, D=None):
     return dx, ddt
 
 
+@cache
+def _compile_chunk_scan_bwd_dcb(
+    x_dtype,
+    dt_dtype,
+    da_dtype,
+    dout_dtype,
+    index_dtype,
+    *,
+    has_seq_idx: bool,
+):
+    class ChunkScanBwdDCB:
+        @cute.jit
+        def __call__(
+            self,
+            mX: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mDOut: cute.Tensor,
+            mSeqIdx: cute.Tensor | None,
+            mDCB: cute.Tensor,
+            count: Int64,
+            seqlen: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            stream: cuda.CUstream,
+        ):
+            self.kernel(
+                mX,
+                mDt,
+                mDA,
+                mDOut,
+                mSeqIdx,
+                mDCB,
+                count,
+                seqlen,
+                nheads,
+                ngroups,
+                nchunks,
+                chunk_size,
+                headdim,
+            ).launch(
+                grid=[cute.ceil_div(count, _NUM_THREADS), 1, 1],
+                block=[_NUM_THREADS, 1, 1],
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(
+            self,
+            mX: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mDOut: cute.Tensor,
+            mSeqIdx: cute.Tensor | None,
+            mDCB: cute.Tensor,
+            count: Int64,
+            seqlen: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+        ):
+            tidx, _, _ = cute.arch.thread_idx()
+            block, _, _ = cute.arch.block_idx()
+            linear = Int64(block) * _NUM_THREADS + tidx
+            if linear < count:
+                source_pos = Int32(linear % chunk_size)
+                outer = linear // chunk_size
+                target_pos = Int32(outer % chunk_size)
+                outer = outer // chunk_size
+                group = Int32(outer % ngroups)
+                outer = outer // ngroups
+                chunk = Int32(outer % nchunks)
+                batch_idx = Int32(outer // nchunks)
+                target = chunk * chunk_size + target_pos
+                source = chunk * chunk_size + source_pos
+                value = Float32(0.0)
+                if target < seqlen and source < seqlen and target_pos >= source_pos:
+                    use_pair = True
+                    if const_expr(has_seq_idx):
+                        use_pair = Int32(
+                            mSeqIdx[Int64(batch_idx) * seqlen + target]
+                        ) == Int32(mSeqIdx[Int64(batch_idx) * seqlen + source])
+                    if use_pair:
+                        heads_per_group = nheads // ngroups
+                        for local_head in cutlass.range(
+                            0, heads_per_group, 1, unroll=1
+                        ):
+                            head = group * heads_per_group + local_head
+                            contraction = Float32(0.0)
+                            for feature in cutlass.range(0, headdim, 1, unroll=1):
+                                dout_idx = (
+                                    (Int64(batch_idx) * seqlen + target) * nheads + head
+                                ) * headdim + feature
+                                x_idx = (
+                                    (Int64(batch_idx) * seqlen + source) * nheads + head
+                                ) * headdim + feature
+                                contraction += Float32(mDOut[dout_idx]) * Float32(
+                                    mX[x_idx]
+                                )
+                            da_base = (
+                                (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                            ) * chunk_size
+                            exponent = Float32(mDA[da_base + target_pos]) - Float32(
+                                mDA[da_base + source_pos]
+                            )
+                            if exponent > Float32(0.0):
+                                exponent = Float32(0.0)
+                            value += (
+                                contraction
+                                * Float32(mDt[da_base + source_pos])
+                                * cute.math.exp2(
+                                    exponent * Float32(_LOG2E), fastmath=True
+                                )
+                            )
+                mDCB[linear] = value
+
+    def fake(dtype):
+        return (
+            cute.runtime.make_fake_tensor(
+                dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+            )
+            if dtype is not None
+            else None
+        )
+
+    return cute.compile(
+        ChunkScanBwdDCB(),
+        fake(x_dtype),
+        fake(dt_dtype),
+        fake(da_dtype),
+        fake(dout_dtype),
+        fake(index_dtype) if has_seq_idx else None,
+        fake(Float32),
+        Int64(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+        options="--enable-tvm-ffi",
+    )
+
+
+def chunk_scan_bwd_dcb_cute(x, dt, dA_cumsum, dout, seq_idx=None, CB=None, ngroups=1):
+    if CB is not None:
+        from mamba_ssm.ops.triton.ssd_chunk_scan import _chunk_scan_bwd_dcb
+
+        return _chunk_scan_bwd_dcb(x, dt, dA_cumsum, dout, seq_idx, CB, ngroups)
+    batch, seqlen, nheads, headdim = x.shape
+    _, _, nchunks, chunk_size = dt.shape
+    tensors = (x, dt, dA_cumsum, dout, seq_idx)
+    if nheads % ngroups != 0 or any(
+        t is not None and (not t.is_cuda or not t.is_contiguous()) for t in tensors
+    ):
+        from mamba_ssm.ops.triton.ssd_chunk_scan import _chunk_scan_bwd_dcb
+
+        return _chunk_scan_bwd_dcb(x, dt, dA_cumsum, dout, seq_idx, CB, ngroups)
+    dcb = torch.empty(
+        batch,
+        nchunks,
+        ngroups,
+        chunk_size,
+        chunk_size,
+        device=x.device,
+        dtype=torch.float32,
+    )
+    compiled = _compile_chunk_scan_bwd_dcb(
+        torch2cute_dtype_map[x.dtype],
+        torch2cute_dtype_map[dt.dtype],
+        torch2cute_dtype_map[dA_cumsum.dtype],
+        torch2cute_dtype_map[dout.dtype],
+        torch2cute_dtype_map[seq_idx.dtype] if seq_idx is not None else None,
+        has_seq_idx=seq_idx is not None,
+    )
+    compiled(
+        x.view(-1),
+        dt.view(-1),
+        dA_cumsum.view(-1),
+        dout.view(-1),
+        seq_idx.view(-1) if seq_idx is not None else None,
+        dcb.view(-1),
+        dcb.numel(),
+        seqlen,
+        nheads,
+        ngroups,
+        nchunks,
+        chunk_size,
+        headdim,
+    )
+    return dcb
+
+
 __all__ = [
     "chunk_scan_bwd_dC_cute",
+    "chunk_scan_bwd_dcb_cute",
     "chunk_scan_bwd_dstates_cute",
     "chunk_scan_bwd_dz_cute",
     "chunk_scan_bwd_dx_cute",

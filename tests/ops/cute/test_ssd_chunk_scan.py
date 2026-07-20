@@ -60,6 +60,32 @@ def test_chunk_scan_fwd_cute(dtype, options):
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("has_seq_idx", [False, True])
+def test_chunk_scan_bwd_dcb_cute(dtype, has_seq_idx):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_chunk_scan import chunk_scan_bwd_dcb_cute
+    from mamba_ssm.ops.triton.ssd_chunk_scan import _chunk_scan_bwd_dcb
+
+    torch.manual_seed(13)
+    batch, seqlen, nheads, ngroups = 2, 47, 4, 2
+    headdim, chunk_size = 17, 32
+    nchunks = (seqlen + chunk_size - 1) // chunk_size
+    x = torch.randn(batch, seqlen, nheads, headdim, device="cuda", dtype=dtype)
+    dout = torch.randn_like(x)
+    dt = torch.rand(batch, nheads, nchunks, chunk_size, device="cuda")
+    dA = -torch.rand_like(dt).cumsum(-1)
+    seq_idx = None
+    if has_seq_idx:
+        seq_idx = torch.zeros(batch, seqlen, device="cuda", dtype=torch.int32)
+        seq_idx[:, 35:] = 1
+    actual = chunk_scan_bwd_dcb_cute(x, dt, dA, dout, seq_idx, ngroups=ngroups)
+    expected = _chunk_scan_bwd_dcb(x, dt, dA, dout, seq_idx, ngroups=ngroups)
+    rtol = 1e-2 if dtype == torch.bfloat16 else 6e-3
+    atol = 5e-2 if dtype == torch.bfloat16 else 1e-2
+    torch.testing.assert_close(actual, expected, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize(
     "options", ["plain", "no_ddacs", "d_scalar", "d_vector_recompute"]
 )
