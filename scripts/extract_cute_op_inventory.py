@@ -200,6 +200,10 @@ CUTE_ROUTES = {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/selective_state_update.py:selective_state_update_cute",
     },
+    "triton.ssd_chunk_state._chunk_cumsum_fwd": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/ssd_chunk_state.py:chunk_cumsum_fwd_cute",
+    },
     "cute.mamba3.mamba3_step_fn.mamba3_step_fn": {
         "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_step_fn.py:mamba3_step_fn",
