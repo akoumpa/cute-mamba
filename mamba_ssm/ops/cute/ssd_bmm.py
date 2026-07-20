@@ -10,6 +10,7 @@ def _can_use_cute_bmm(a, chunk_size, *, seq_idx=None):
         a.is_cuda
         and a.dtype in (torch.float16, torch.bfloat16)
         and a.stride(-1) == 1
+        and a.shape[-1] % 8 == 0
         and a.shape[1] % chunk_size == 0
         and seq_idx is None
         and (a.dim() == 3 or (a.dim() == 4 and a.shape[2] == 1))

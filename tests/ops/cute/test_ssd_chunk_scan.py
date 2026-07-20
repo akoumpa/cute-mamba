@@ -214,6 +214,64 @@ def test_chunk_scan_bwd_dC_cute(dtype, has_seq_idx, has_c):
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("options", ["plain", "d_scalar", "d_vector_z"])
+def test_chunk_scan_cute_autograd(dtype, options):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_chunk_scan import chunk_scan_cute
+    from mamba_ssm.ops.triton.ssd_chunk_scan import chunk_scan
+
+    torch.manual_seed(16)
+    batch, seqlen, nheads, ngroups = 1, 64, 4, 1
+    headdim, dstate, chunk_size = 17, 24, 32
+    nchunks = seqlen // chunk_size
+    tensors = (
+        torch.randn(batch, seqlen, ngroups, dstate, device="cuda", dtype=dtype),
+        torch.randn(batch, seqlen, ngroups, dstate, device="cuda", dtype=dtype),
+        torch.randn(batch, seqlen, nheads, headdim, device="cuda", dtype=dtype),
+        torch.rand(batch, nheads, nchunks, chunk_size, device="cuda"),
+        -torch.rand(batch, nheads, nchunks, chunk_size, device="cuda").cumsum(-1),
+        torch.randn(
+            batch, nchunks, nheads, headdim, dstate, device="cuda", dtype=dtype
+        ),
+    )
+    D = None
+    z = None
+    if options == "d_scalar":
+        D = torch.randn(nheads, device="cuda")
+    elif options == "d_vector_z":
+        D = torch.randn(nheads, headdim, device="cuda")
+        z = torch.randn(batch, seqlen, nheads, headdim, device="cuda", dtype=dtype)
+    optional = tuple(t for t in (D, z) if t is not None)
+    actual_inputs = tuple(t.detach().requires_grad_() for t in (*tensors, *optional))
+    expected_inputs = tuple(
+        t.detach().clone().requires_grad_() for t in (*tensors, *optional)
+    )
+
+    def unpack(inputs):
+        base = inputs[:6]
+        if options == "plain":
+            return (*base, None, None)
+        if options == "d_scalar":
+            return (*base, inputs[6], None)
+        return (*base, inputs[6], inputs[7])
+
+    actual = chunk_scan_cute(*unpack(actual_inputs))
+    expected = chunk_scan(*unpack(expected_inputs))
+    forward_rtol = 1.5e-2 if dtype == torch.bfloat16 else 8e-3
+    forward_atol = 8e-2 if dtype == torch.bfloat16 else 2e-2
+    torch.testing.assert_close(actual, expected, rtol=forward_rtol, atol=forward_atol)
+    grad = torch.randn_like(actual)
+    actual_grads = torch.autograd.grad(actual, actual_inputs, grad)
+    expected_grads = torch.autograd.grad(expected, expected_inputs, grad)
+    grad_rtol = 1e-1 if dtype == torch.bfloat16 else 1e-2
+    grad_atol = 2e-1 if dtype == torch.bfloat16 else 3e-2
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads):
+        torch.testing.assert_close(
+            actual_grad, expected_grad, rtol=grad_rtol, atol=grad_atol
+        )
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_chunk_scan_bwd_ddAcs_stable_cute(dtype):
     _require_cute()
     from mamba_ssm.ops.cute.ssd_chunk_scan import (

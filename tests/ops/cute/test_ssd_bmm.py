@@ -44,3 +44,24 @@ def test_bmm_chunk_bwd_cute_matches_triton(dtype, grouped, has_residual):
     ref = _bmm_chunk_bwd(a, dout, residual=residual)
     assert out.data_ptr() == out_buffer.data_ptr()
     torch.testing.assert_close(out, ref, rtol=2e-2, atol=2e-2)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_bmm_chunk_cute_falls_back_for_unaligned_state(dtype):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_bmm import (
+        _bmm_chunk_bwd_cute,
+        _bmm_chunk_fwd_cute,
+    )
+    from mamba_ssm.ops.triton.ssd_bmm import _bmm_chunk_bwd, _bmm_chunk_fwd
+
+    torch.manual_seed(2)
+    a = torch.randn(1, 64, 1, 19, device="cuda", dtype=dtype)
+    b = torch.randn_like(a)
+    actual = _bmm_chunk_fwd_cute(a, b, 32)
+    expected = _bmm_chunk_fwd(a, b, 32)
+    torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
+    dout = torch.randn(1, 2, 1, 32, 32, device="cuda", dtype=dtype)
+    actual_bwd = _bmm_chunk_bwd_cute(a, dout)
+    expected_bwd = _bmm_chunk_bwd(a, dout)
+    torch.testing.assert_close(actual_bwd, expected_bwd, rtol=2e-2, atol=2e-2)

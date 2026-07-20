@@ -9,6 +9,7 @@ import cutlass
 import cutlass.cute as cute
 import torch
 from cutlass import Float32, Int32, Int64, const_expr
+from mamba_ssm.ops.cute.ssd_bmm import _bmm_chunk_bwd_cute, _bmm_chunk_fwd_cute
 from quack.activation import sigmoid
 from quack.cute_dsl_utils import torch2cute_dtype_map
 from quack.reduce import row_reduce
@@ -1622,6 +1623,97 @@ def chunk_scan_bwd_ddAcs_stable_cute(x, dt, dA_cumsum, dout, cb):
     return ddA
 
 
+class ChunkScanCuteFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, B, C, x, dt, dA_cumsum, prev_states, D=None, z=None):
+        if B.stride(-1) != 1:
+            B = B.contiguous()
+        if C.stride(-1) != 1:
+            C = C.contiguous()
+        if x.stride(-1) != 1 and x.stride(1) != 1:
+            x = x.contiguous()
+        if z is not None and z.stride(-1) != 1 and z.stride(1) != 1:
+            z = z.contiguous()
+        if D is not None and D.stride(-1) != 1:
+            D = D.contiguous()
+        chunk_size = dt.shape[-1]
+        CB = _bmm_chunk_fwd_cute(C, B, chunk_size)
+        out, out_x = chunk_scan_fwd_cute(CB, x, dt, dA_cumsum, C, prev_states, D=D, z=z)
+        ctx.save_for_backward(
+            out if z is None else out_x,
+            B,
+            C,
+            CB,
+            x,
+            dt,
+            dA_cumsum,
+            prev_states,
+            D,
+            z,
+        )
+        return out
+
+    @staticmethod
+    def backward(ctx, dout):
+        if dout.stride(-1) != 1:
+            dout = dout.contiguous()
+        out, B, C, CB, x, dt, dA_cumsum, prev_states, D, z = ctx.saved_tensors
+        ngroups = B.shape[2]
+        chunk_size = dt.shape[-1]
+        if z is not None:
+            dz, dout, dD, ddA_cumsum = chunk_scan_bwd_dz_cute(
+                x, z, out, dout, chunk_size, D=D
+            )
+        else:
+            dz = None
+        dprev_states = chunk_scan_bwd_dstates_cute(
+            C, dA_cumsum, dout, dtype=prev_states.dtype
+        )
+        dC = chunk_scan_bwd_dC_cute(prev_states, dA_cumsum, dout, ngroups=ngroups).to(
+            C.dtype
+        )
+        dCB = chunk_scan_bwd_dcb_cute(x, dt, dA_cumsum, dout, ngroups=ngroups).to(
+            CB.dtype
+        )
+        dB = _bmm_chunk_bwd_cute(C, dCB)
+        dC = _bmm_chunk_bwd_cute(B, dCB.transpose(-1, -2), residual=dC)
+        dx, ddt = chunk_scan_bwd_dx_cute(CB, x, dt, dA_cumsum, dout, D=D)
+        if z is not None:
+            ddA_cumsum = ddA_cumsum - ddt * dt
+        else:
+            out_no_d = out.float()
+            if D is not None:
+                d_view = D[:, None] if D.ndim == 1 else D
+                out_no_d = out_no_d - x.float() * d_view
+                dD = (dout.float() * x.float()).sum(dim=(0, 1))
+                if D.ndim == 1:
+                    dD = dD.sum(dim=-1)
+                dD = dD.to(D.dtype)
+            else:
+                dD = None
+            batch, seqlen, nheads, _ = x.shape
+            nchunks = dt.shape[2]
+            ddA_cumsum = (out_no_d * dout.float()).sum(dim=-1)
+            ddA_cumsum = ddA_cumsum.view(batch, nchunks, chunk_size, nheads).permute(
+                0, 3, 1, 2
+            )
+            ddA_cumsum = ddA_cumsum - ddt * dt
+        return (
+            dB,
+            dC,
+            dx,
+            ddt,
+            ddA_cumsum.to(dA_cumsum.dtype),
+            dprev_states,
+            dD,
+            dz,
+        )
+
+
+def chunk_scan_cute(B, C, x, dt, dA_cumsum, prev_states, D=None, z=None):
+    return ChunkScanCuteFn.apply(B, C, x, dt, dA_cumsum, prev_states, D, z)
+
+
 __all__ = [
     "chunk_scan_bwd_dC_cute",
     "chunk_scan_bwd_dcb_cute",
@@ -1630,5 +1722,6 @@ __all__ = [
     "chunk_scan_bwd_dstates_cute",
     "chunk_scan_bwd_dz_cute",
     "chunk_scan_bwd_dx_cute",
+    "chunk_scan_cute",
     "chunk_scan_fwd_cute",
 ]
