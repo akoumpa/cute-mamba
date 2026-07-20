@@ -928,9 +928,350 @@ def chunk_state_bwd_dx_cute(B, x, dt, dA_cumsum, dstates, dx=None):
     return dx, ddt, ddA
 
 
+@cache
+def _compile_chunk_state_bwd_db(
+    x_dtype,
+    dt_dtype,
+    da_dtype,
+    dstate_dtype,
+    b_dtype,
+    index_dtype,
+    *,
+    has_b: bool,
+    has_seq_idx: bool,
+):
+    class ChunkStateBwdDb:
+        @cute.jit
+        def __call__(
+            self,
+            mX: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mDStates: cute.Tensor,
+            mB: cute.Tensor | None,
+            mSeqIdx: cute.Tensor | None,
+            mDB: cute.Tensor,
+            mDDA: cute.Tensor | None,
+            batch: Int32,
+            seqlen: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            dstate: Int32,
+            stream: cuda.CUstream,
+        ):
+            db_rows = Int64(batch) * nchunks * ngroups * chunk_size
+            self.db_kernel(
+                mX,
+                mDt,
+                mDA,
+                mDStates,
+                mSeqIdx,
+                mDB,
+                db_rows,
+                seqlen,
+                nheads,
+                ngroups,
+                nchunks,
+                chunk_size,
+                headdim,
+                dstate,
+            ).launch(
+                grid=[db_rows, 1, 1],
+                block=[_NUM_THREADS, 1, 1],
+                stream=stream,
+            )
+            if const_expr(has_b):
+                dda_rows = Int64(batch) * nchunks * nheads * chunk_size
+                self.dda_kernel(
+                    mX,
+                    mDt,
+                    mDA,
+                    mDStates,
+                    mB,
+                    mSeqIdx,
+                    mDDA,
+                    dda_rows,
+                    seqlen,
+                    nheads,
+                    ngroups,
+                    nchunks,
+                    chunk_size,
+                    headdim,
+                    dstate,
+                ).launch(
+                    grid=[dda_rows, 1, 1],
+                    block=[_NUM_THREADS, 1, 1],
+                    smem=_NUM_WARPS * 4,
+                    stream=stream,
+                )
+                outer = Int64(batch) * nchunks * nheads
+                self.prefix_kernel(mDDA, outer, chunk_size).launch(
+                    grid=[cute.ceil_div(outer, _NUM_THREADS), 1, 1],
+                    block=[_NUM_THREADS, 1, 1],
+                    stream=stream,
+                )
+
+        @cute.kernel
+        def db_kernel(
+            self,
+            mX: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mDStates: cute.Tensor,
+            mSeqIdx: cute.Tensor | None,
+            mDB: cute.Tensor,
+            rows: Int64,
+            seqlen: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            dstate: Int32,
+        ):
+            state_feature, _, _ = cute.arch.thread_idx()
+            row, _, _ = cute.arch.block_idx()
+            if Int64(row) < rows:
+                pos = Int32(row % chunk_size)
+                outer = row // chunk_size
+                group = Int32(outer % ngroups)
+                outer = outer // ngroups
+                chunk = Int32(outer % nchunks)
+                batch_idx = Int32(outer // nchunks)
+                token = chunk * chunk_size + pos
+                if token < seqlen and state_feature < dstate:
+                    chunk_end = min((chunk + 1) * chunk_size, seqlen)
+                    use_token = True
+                    if const_expr(has_seq_idx):
+                        use_token = Int32(
+                            mSeqIdx[Int64(batch_idx) * seqlen + token]
+                        ) == Int32(mSeqIdx[Int64(batch_idx) * seqlen + chunk_end - 1])
+                    value = Float32(0.0)
+                    if use_token:
+                        heads_per_group = nheads // ngroups
+                        for local_head in cutlass.range(
+                            0, heads_per_group, 1, unroll=1
+                        ):
+                            head = group * heads_per_group + local_head
+                            da_base = (
+                                (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                            ) * chunk_size
+                            exponent = Float32(mDA[da_base + chunk_size - 1]) - Float32(
+                                mDA[da_base + pos]
+                            )
+                            if exponent > Float32(0.0):
+                                exponent = Float32(0.0)
+                            scale = cute.math.exp2(
+                                exponent * Float32(_LOG2E), fastmath=True
+                            ) * Float32(mDt[da_base + pos])
+                            contraction = Float32(0.0)
+                            for feature in cutlass.range(0, headdim, 1, unroll=1):
+                                x_idx = (
+                                    (Int64(batch_idx) * seqlen + token) * nheads + head
+                                ) * headdim + feature
+                                ds_idx = (
+                                    (
+                                        (Int64(batch_idx) * nchunks + chunk) * nheads
+                                        + head
+                                    )
+                                    * headdim
+                                    + feature
+                                ) * dstate + state_feature
+                                contraction += Float32(mX[x_idx]) * Float32(
+                                    mDStates[ds_idx]
+                                )
+                            value += contraction * scale
+                    db_idx = (
+                        (Int64(batch_idx) * seqlen + token) * ngroups + group
+                    ) * dstate + state_feature
+                    mDB[db_idx] = value
+
+        @cute.kernel
+        def dda_kernel(
+            self,
+            mX: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mDStates: cute.Tensor,
+            mB: cute.Tensor,
+            mSeqIdx: cute.Tensor | None,
+            mDDA: cute.Tensor,
+            rows: Int64,
+            seqlen: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            dstate: Int32,
+        ):
+            state_feature, _, _ = cute.arch.thread_idx()
+            row, _, _ = cute.arch.block_idx()
+            if Int64(row) < rows:
+                pos = Int32(row % chunk_size)
+                outer = row // chunk_size
+                head = Int32(outer % nheads)
+                outer = outer // nheads
+                chunk = Int32(outer % nchunks)
+                batch_idx = Int32(outer // nchunks)
+                token = chunk * chunk_size + pos
+                group = head // (nheads // ngroups)
+                value = Float32(0.0)
+                if token < seqlen and state_feature < dstate:
+                    chunk_end = min((chunk + 1) * chunk_size, seqlen)
+                    use_token = True
+                    if const_expr(has_seq_idx):
+                        use_token = Int32(
+                            mSeqIdx[Int64(batch_idx) * seqlen + token]
+                        ) == Int32(mSeqIdx[Int64(batch_idx) * seqlen + chunk_end - 1])
+                    if use_token:
+                        contraction = Float32(0.0)
+                        for feature in cutlass.range(0, headdim, 1, unroll=1):
+                            x_idx = (
+                                (Int64(batch_idx) * seqlen + token) * nheads + head
+                            ) * headdim + feature
+                            ds_idx = (
+                                ((Int64(batch_idx) * nchunks + chunk) * nheads + head)
+                                * headdim
+                                + feature
+                            ) * dstate + state_feature
+                            contraction += Float32(mX[x_idx]) * Float32(
+                                mDStates[ds_idx]
+                            )
+                        da_base = (
+                            (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                        ) * chunk_size
+                        exponent = Float32(mDA[da_base + chunk_size - 1]) - Float32(
+                            mDA[da_base + pos]
+                        )
+                        if exponent > Float32(0.0):
+                            exponent = Float32(0.0)
+                        scale = cute.math.exp2(
+                            exponent * Float32(_LOG2E), fastmath=True
+                        ) * Float32(mDt[da_base + pos])
+                        b_idx = (
+                            (Int64(batch_idx) * seqlen + token) * ngroups + group
+                        ) * dstate + state_feature
+                        value = contraction * scale * Float32(mB[b_idx])
+
+                smem = cutlass.utils.SmemAllocator()
+                reduction_buffer = smem.allocate_tensor(
+                    Float32,
+                    cute.make_layout((1, (_NUM_WARPS, 1))),
+                    byte_alignment=16,
+                )
+                total = row_reduce(
+                    value,
+                    cute.ReductionOp.ADD,
+                    _NUM_THREADS,
+                    reduction_buffer=reduction_buffer,
+                )
+                if cute.arch.warp_idx() == 0 and cute.arch.lane_idx() == 0:
+                    da_base = (
+                        (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                    ) * chunk_size
+                    if token < seqlen and pos < chunk_size - 1:
+                        mDDA[da_base + pos + 1] = total
+
+        @cute.kernel
+        def prefix_kernel(self, mDDA: cute.Tensor, outer: Int64, chunk_size: Int32):
+            tidx, _, _ = cute.arch.thread_idx()
+            block, _, _ = cute.arch.block_idx()
+            idx = Int64(block) * _NUM_THREADS + tidx
+            if idx < outer:
+                base = idx * chunk_size
+                total = Float32(0.0)
+                for pos in cutlass.range(0, chunk_size, 1, unroll=1):
+                    total += Float32(mDDA[base + pos])
+                    mDDA[base + pos] = total
+
+    def fake(dtype):
+        return (
+            cute.runtime.make_fake_tensor(
+                dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+            )
+            if dtype is not None
+            else None
+        )
+
+    return cute.compile(
+        ChunkStateBwdDb(),
+        fake(x_dtype),
+        fake(dt_dtype),
+        fake(da_dtype),
+        fake(dstate_dtype),
+        fake(b_dtype) if has_b else None,
+        fake(index_dtype) if has_seq_idx else None,
+        fake(Float32),
+        fake(Float32) if has_b else None,
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+        options="--enable-tvm-ffi",
+    )
+
+
+def chunk_state_bwd_db_cute(x, dt, dA_cumsum, dstates, seq_idx=None, B=None, ngroups=1):
+    batch, seqlen, nheads, headdim = x.shape
+    _, _, nchunks, chunk_size = dt.shape
+    dstate = dstates.shape[-1]
+    if dstate > _NUM_THREADS or nheads % ngroups != 0:
+        from mamba_ssm.ops.triton.ssd_chunk_state import _chunk_state_bwd_db
+
+        return _chunk_state_bwd_db(x, dt, dA_cumsum, dstates, seq_idx, B, ngroups)
+    tensors = (x, dt, dA_cumsum, dstates, seq_idx, B)
+    if any(t is not None and (not t.is_cuda or not t.is_contiguous()) for t in tensors):
+        from mamba_ssm.ops.triton.ssd_chunk_state import _chunk_state_bwd_db
+
+        return _chunk_state_bwd_db(x, dt, dA_cumsum, dstates, seq_idx, B, ngroups)
+    dB = torch.empty(
+        batch, seqlen, ngroups, dstate, device=x.device, dtype=torch.float32
+    )
+    ddA = torch.zeros_like(dA_cumsum, dtype=torch.float32) if B is not None else None
+    compiled = _compile_chunk_state_bwd_db(
+        torch2cute_dtype_map[x.dtype],
+        torch2cute_dtype_map[dt.dtype],
+        torch2cute_dtype_map[dA_cumsum.dtype],
+        torch2cute_dtype_map[dstates.dtype],
+        torch2cute_dtype_map[B.dtype] if B is not None else None,
+        torch2cute_dtype_map[seq_idx.dtype] if seq_idx is not None else None,
+        has_b=B is not None,
+        has_seq_idx=seq_idx is not None,
+    )
+    compiled(
+        x.view(-1),
+        dt.view(-1),
+        dA_cumsum.view(-1),
+        dstates.view(-1),
+        B.view(-1) if B is not None else None,
+        seq_idx.view(-1) if seq_idx is not None else None,
+        dB.view(-1),
+        ddA.view(-1) if ddA is not None else None,
+        batch,
+        seqlen,
+        nheads,
+        ngroups,
+        nchunks,
+        chunk_size,
+        headdim,
+        dstate,
+    )
+    return dB if B is None else (dB, ddA)
+
+
 __all__ = [
     "chunk_cumsum_bwd_cute",
     "chunk_cumsum_fwd_cute",
+    "chunk_state_bwd_db_cute",
     "chunk_state_bwd_dx_cute",
     "chunk_state_fwd_cute",
 ]

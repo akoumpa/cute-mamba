@@ -126,3 +126,41 @@ def test_chunk_state_bwd_dx_cute(dtype):
     assert actual[0].data_ptr() == buffer.data_ptr()
     for actual_tensor, expected_tensor in zip(actual, expected):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=5e-3, atol=8e-3)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("has_seq_idx", [False, True])
+@pytest.mark.parametrize("has_b", [False, True])
+def test_chunk_state_bwd_db_cute(dtype, has_seq_idx, has_b):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_chunk_state import chunk_state_bwd_db_cute
+    from mamba_ssm.ops.triton.ssd_chunk_state import _chunk_state_bwd_db
+
+    torch.manual_seed(4)
+    batch, seqlen, nheads, ngroups = 2, 47, 4, 2
+    headdim, dstate, chunk_size = 17, 19, 32
+    nchunks = (seqlen + chunk_size - 1) // chunk_size
+    x = torch.randn(batch, seqlen, nheads, headdim, device="cuda", dtype=dtype)
+    dt = torch.rand(batch, nheads, nchunks, chunk_size, device="cuda")
+    dA = -torch.rand_like(dt).cumsum(-1)
+    dstates = torch.randn(
+        batch, nchunks, nheads, headdim, dstate, device="cuda", dtype=dtype
+    )
+    seq_idx = None
+    if has_seq_idx:
+        seq_idx = torch.arange(seqlen, device="cuda", dtype=torch.int32)[None].repeat(
+            batch, 1
+        )
+        seq_idx[:, :35] = 0
+        seq_idx[:, 35:] = 1
+    B = (
+        torch.randn(batch, seqlen, ngroups, dstate, device="cuda", dtype=dtype)
+        if has_b
+        else None
+    )
+    actual = chunk_state_bwd_db_cute(x, dt, dA, dstates, seq_idx, B, ngroups)
+    expected = _chunk_state_bwd_db(x, dt, dA, dstates, seq_idx, B, ngroups)
+    actual_tensors = actual if isinstance(actual, tuple) else (actual,)
+    expected_tensors = expected if isinstance(expected, tuple) else (expected,)
+    for actual_tensor, expected_tensor in zip(actual_tensors, expected_tensors):
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=6e-3, atol=9e-3)
