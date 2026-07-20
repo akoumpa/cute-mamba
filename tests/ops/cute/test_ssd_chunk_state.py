@@ -231,3 +231,30 @@ def test_chunk_state_cute_autograd(dtype, states_in_fp32):
         torch.testing.assert_close(
             actual_grad, expected_grad, rtol=grad_rtol, atol=grad_atol
         )
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("states_in_fp32", [False, True])
+def test_chunk_state_varlen_cute(dtype, states_in_fp32):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_chunk_state import chunk_state_varlen_cute
+    from mamba_ssm.ops.triton.ssd_chunk_state import chunk_state_varlen
+
+    torch.manual_seed(7)
+    total_seqlen, nheads, ngroups = 83, 4, 2
+    headdim, dstate, chunk_size = 17, 19, 32
+    nchunks = (total_seqlen + chunk_size - 1) // chunk_size
+    x = torch.randn(total_seqlen, nheads, headdim, device="cuda", dtype=dtype)
+    B = torch.randn(total_seqlen, ngroups, dstate, device="cuda", dtype=dtype)
+    dt = torch.rand(nheads, nchunks, chunk_size, device="cuda")
+    dA = -torch.rand_like(dt).cumsum(-1)
+    cu_seqlens = torch.tensor([0, 19, 47, 83], device="cuda", dtype=torch.int32)
+    output_dtype = torch.float32 if states_in_fp32 else dtype
+    chunk_states = torch.randn(
+        nchunks, nheads, headdim, dstate, device="cuda", dtype=output_dtype
+    )
+    actual = chunk_state_varlen_cute(B, x, dt, dA, cu_seqlens, chunk_states)
+    expected = chunk_state_varlen(B, x, dt, dA, cu_seqlens, chunk_states)
+    rtol = 1e-2 if dtype == torch.bfloat16 else 5e-3
+    atol = 4e-2 if dtype == torch.bfloat16 else 8e-3
+    torch.testing.assert_close(actual, expected, rtol=rtol, atol=atol)

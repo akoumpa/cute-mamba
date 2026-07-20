@@ -1302,6 +1302,197 @@ def chunk_state_cute(B, x, dt, dA_cumsum, states_in_fp32=True):
     return ChunkStateCuteFn.apply(B, x, dt, dA_cumsum, states_in_fp32)
 
 
+@cache
+def _compile_chunk_state_varlen(
+    b_dtype,
+    x_dtype,
+    dt_dtype,
+    da_dtype,
+    index_dtype,
+    chunk_state_dtype,
+):
+    class ChunkStateVarlen:
+        @cute.jit
+        def __call__(
+            self,
+            mB: cute.Tensor,
+            mX: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mCuSeqlens: cute.Tensor,
+            mChunkStates: cute.Tensor,
+            mStates: cute.Tensor,
+            count: Int64,
+            total_seqlen: Int32,
+            batch: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            dstate: Int32,
+            stream: cuda.CUstream,
+        ):
+            self.kernel(
+                mB,
+                mX,
+                mDt,
+                mDA,
+                mCuSeqlens,
+                mChunkStates,
+                mStates,
+                count,
+                total_seqlen,
+                batch,
+                nheads,
+                ngroups,
+                nchunks,
+                chunk_size,
+                headdim,
+                dstate,
+            ).launch(
+                grid=[cute.ceil_div(count, _NUM_THREADS), 1, 1],
+                block=[_NUM_THREADS, 1, 1],
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(
+            self,
+            mB: cute.Tensor,
+            mX: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mCuSeqlens: cute.Tensor,
+            mChunkStates: cute.Tensor,
+            mStates: cute.Tensor,
+            count: Int64,
+            total_seqlen: Int32,
+            batch: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            dstate: Int32,
+        ):
+            tidx, _, _ = cute.arch.thread_idx()
+            block, _, _ = cute.arch.block_idx()
+            linear = Int64(block) * _NUM_THREADS + tidx
+            if linear < count:
+                state_feature = Int32(linear % dstate)
+                outer = linear // dstate
+                head_feature = Int32(outer % headdim)
+                outer = outer // headdim
+                head = Int32(outer % nheads)
+                batch_idx = Int32(outer // nheads)
+                group = head // (nheads // ngroups)
+                start = Int32(mCuSeqlens[batch_idx])
+                end = Int32(mCuSeqlens[batch_idx + 1])
+                chunk = (end - 1) // chunk_size
+                chunk_start = chunk * chunk_size
+                token_start = max(start, chunk_start)
+                pos_end = end - chunk_start
+                da_base = (Int64(head) * nchunks + chunk) * chunk_size
+                da_last = Float32(mDA[da_base + pos_end - 1])
+                value = Float32(0.0)
+                for token in cutlass.range(token_start, end, 1, unroll=1):
+                    pos = token - chunk_start
+                    exponent = da_last - Float32(mDA[da_base + pos])
+                    if exponent > Float32(0.0):
+                        exponent = Float32(0.0)
+                    scale = cute.math.exp2(
+                        exponent * Float32(_LOG2E), fastmath=True
+                    ) * Float32(mDt[da_base + pos])
+                    x_idx = (Int64(token) * nheads + head) * headdim + head_feature
+                    b_idx = (Int64(token) * ngroups + group) * dstate + state_feature
+                    value += Float32(mX[x_idx]) * Float32(mB[b_idx]) * scale
+                if start < chunk_start:
+                    cs_idx = (
+                        (Int64(chunk) * nheads + head) * headdim + head_feature
+                    ) * dstate + state_feature
+                    value += Float32(mChunkStates[cs_idx]) * cute.math.exp2(
+                        da_last * Float32(_LOG2E), fastmath=True
+                    )
+                mStates[linear] = chunk_state_dtype(value)
+
+    def fake(dtype):
+        return cute.runtime.make_fake_tensor(
+            dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+        )
+
+    return cute.compile(
+        ChunkStateVarlen(),
+        fake(b_dtype),
+        fake(x_dtype),
+        fake(dt_dtype),
+        fake(da_dtype),
+        fake(index_dtype),
+        fake(chunk_state_dtype),
+        fake(chunk_state_dtype),
+        Int64(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+        options="--enable-tvm-ffi",
+    )
+
+
+def chunk_state_varlen_cute(B, x, dt, dA_cumsum, cu_seqlens, chunk_states):
+    total_seqlen, nheads, headdim = x.shape
+    _, nchunks, chunk_size = dt.shape
+    _, ngroups, dstate = B.shape
+    batch = cu_seqlens.shape[0] - 1
+    tensors = (B, x, dt, dA_cumsum, cu_seqlens, chunk_states)
+    if nheads % ngroups != 0 or any(
+        not t.is_cuda or not t.is_contiguous() for t in tensors
+    ):
+        from mamba_ssm.ops.triton.ssd_chunk_state import chunk_state_varlen
+
+        return chunk_state_varlen(B, x, dt, dA_cumsum, cu_seqlens, chunk_states)
+    states = torch.empty(
+        batch,
+        nheads,
+        headdim,
+        dstate,
+        dtype=chunk_states.dtype,
+        device=chunk_states.device,
+    )
+    compiled = _compile_chunk_state_varlen(
+        torch2cute_dtype_map[B.dtype],
+        torch2cute_dtype_map[x.dtype],
+        torch2cute_dtype_map[dt.dtype],
+        torch2cute_dtype_map[dA_cumsum.dtype],
+        torch2cute_dtype_map[cu_seqlens.dtype],
+        torch2cute_dtype_map[chunk_states.dtype],
+    )
+    compiled(
+        B.view(-1),
+        x.view(-1),
+        dt.view(-1),
+        dA_cumsum.view(-1),
+        cu_seqlens.view(-1),
+        chunk_states.view(-1),
+        states.view(-1),
+        states.numel(),
+        total_seqlen,
+        batch,
+        nheads,
+        ngroups,
+        nchunks,
+        chunk_size,
+        headdim,
+        dstate,
+    )
+    return states
+
+
 __all__ = [
     "chunk_cumsum_bwd_cute",
     "chunk_cumsum_fwd_cute",
@@ -1310,4 +1501,5 @@ __all__ = [
     "chunk_state_bwd_dx_cute",
     "chunk_state_cute",
     "chunk_state_fwd_cute",
+    "chunk_state_varlen_cute",
 ]
