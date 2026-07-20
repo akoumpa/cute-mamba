@@ -19,10 +19,39 @@ def test_angle_dt_fwd_cute(dtype, varlen):
     batch, seqlen, nheads, dim = (1, 37, 4, 18) if varlen else (3, 37, 4, 18)
     angle = torch.randn(batch, seqlen, nheads, dim, device="cuda", dtype=dtype)
     dt = torch.randn(batch, nheads, seqlen, device="cuda", dtype=dtype)
-    cu_seqlens = torch.tensor([0, 11, 23, 37], device="cuda", dtype=torch.int32) if varlen else None
+    cu_seqlens = (
+        torch.tensor([0, 11, 23, 37], device="cuda", dtype=torch.int32)
+        if varlen
+        else None
+    )
     num_sequences = 3 if varlen else batch
     initial = torch.randn(num_sequences, nheads, dim, device="cuda")
     actual = angle_dt_fwd_cute(angle, dt, initial, 16, True, cu_seqlens)
     expected = angle_dt_fwd(angle, dt, initial, 16, True, cu_seqlens)
     torch.testing.assert_close(actual[0], expected[0], rtol=3e-3, atol=5e-3)
     torch.testing.assert_close(actual[1], expected[1], rtol=3e-3, atol=5e-3)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("varlen", [False, True])
+def test_angle_dt_bwd_cute(dtype, varlen):
+    _require_cute()
+    from mamba_ssm.ops.cute.mamba3.angle_dt import angle_dt_bwd_cute
+    from mamba_ssm.ops.triton.mamba3.angle_dt import angle_dt_bwd
+
+    torch.manual_seed(1)
+    batch, seqlen, nheads, dim = (1, 37, 4, 18) if varlen else (3, 37, 4, 18)
+    angle = torch.randn(batch, seqlen, nheads, dim, device="cuda", dtype=dtype)
+    dt = torch.randn(batch, nheads, seqlen, device="cuda", dtype=dtype)
+    grad_out = torch.randn_like(angle)
+    cu_seqlens = (
+        torch.tensor([0, 11, 23, 37], device="cuda", dtype=torch.int32)
+        if varlen
+        else None
+    )
+    num_sequences = 3 if varlen else batch
+    grad_final = torch.randn(num_sequences, nheads, dim, device="cuda", dtype=dtype)
+    actual = angle_dt_bwd_cute(grad_out, angle, dt, True, 16, grad_final, cu_seqlens)
+    expected = angle_dt_bwd(grad_out, angle, dt, True, 16, grad_final, cu_seqlens)
+    for actual_tensor, expected_tensor in zip(actual, expected):
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=4e-3, atol=8e-3)

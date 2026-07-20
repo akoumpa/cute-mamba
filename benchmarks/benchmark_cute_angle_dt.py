@@ -1,8 +1,8 @@
 import torch
 from triton.testing import do_bench
 
-from mamba_ssm.ops.cute.mamba3.angle_dt import angle_dt_fwd_cute
-from mamba_ssm.ops.triton.mamba3.angle_dt import angle_dt_fwd
+from mamba_ssm.ops.cute.mamba3.angle_dt import angle_dt_bwd_cute, angle_dt_fwd_cute
+from mamba_ssm.ops.triton.mamba3.angle_dt import angle_dt_bwd, angle_dt_fwd
 
 
 def benchmark_case(dtype, batch, seqlen, nheads, dim, varlen):
@@ -13,17 +13,46 @@ def benchmark_case(dtype, batch, seqlen, nheads, dim, varlen):
     if varlen:
         lengths = [seqlen // 4] * 4
         lengths[-1] += seqlen - sum(lengths)
-        cu = torch.tensor([0, *torch.tensor(lengths).cumsum(0).tolist()], device="cuda", dtype=torch.int32)
+        cu = torch.tensor(
+            [0, *torch.tensor(lengths).cumsum(0).tolist()],
+            device="cuda",
+            dtype=torch.int32,
+        )
         num_sequences = 4
     initial = torch.randn(num_sequences, nheads, dim, device="cuda")
-    cute_fn = lambda: angle_dt_fwd_cute(angle, dt, initial, 64, True, cu)
-    triton_fn = lambda: angle_dt_fwd(angle, dt, initial, 64, True, cu)
+
+    def cute_fn():
+        return angle_dt_fwd_cute(angle, dt, initial, 64, True, cu)
+
+    def triton_fn():
+        return angle_dt_fwd(angle, dt, initial, 64, True, cu)
+
     cute_fn()
     triton_fn()
     cute_ms = do_bench(cute_fn, warmup=50, rep=300)
     triton_ms = do_bench(triton_fn, warmup=50, rep=300)
     print(
-        f"dtype={dtype} batch={batch} seqlen={seqlen} heads={nheads} dim={dim} "
+        f"op=fwd dtype={dtype} batch={batch} seqlen={seqlen} heads={nheads} dim={dim} "
+        f"varlen={varlen} speedup={triton_ms / cute_ms:.3f} "
+        f"cute_ms={cute_ms:.4f} triton_ms={triton_ms:.4f}",
+        flush=True,
+    )
+
+    grad_out = torch.randn_like(angle)
+    grad_final = torch.randn_like(initial)
+
+    def cute_bwd():
+        return angle_dt_bwd_cute(grad_out, angle, dt, True, 64, grad_final, cu)
+
+    def triton_bwd():
+        return angle_dt_bwd(grad_out, angle, dt, True, 64, grad_final, cu)
+
+    cute_bwd()
+    triton_bwd()
+    cute_ms = do_bench(cute_bwd, warmup=50, rep=300)
+    triton_ms = do_bench(triton_bwd, warmup=50, rep=300)
+    print(
+        f"op=bwd dtype={dtype} batch={batch} seqlen={seqlen} heads={nheads} dim={dim} "
         f"varlen={varlen} speedup={triton_ms / cute_ms:.3f} "
         f"cute_ms={cute_ms:.4f} triton_ms={triton_ms:.4f}",
         flush=True,

@@ -236,6 +236,10 @@ CUTE_ROUTES = {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/mamba3/angle_dt.py:angle_dt_fwd_cute",
     },
+    "triton.mamba3.angle_dt.angle_dt_bwd": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/angle_dt.py:angle_dt_bwd_cute",
+    },
     **{
         f"triton.mamba3.utils.{symbol}": {
             "status": "present_unverified",

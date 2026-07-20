@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 49,
-    "present_unverified": 18,
+    "missing": 48,
+    "present_unverified": 19,
     "promoted": 2
   },
   "routes": [
@@ -320,9 +320,9 @@
     {
       "group": "mamba3",
       "id": "triton.mamba3.angle_dt.angle_dt_bwd",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/angle_dt.py:angle_dt_bwd_cute",
       "source": "mamba_ssm/ops/triton/mamba3/angle_dt.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "angle_dt_bwd"
     },
     {
