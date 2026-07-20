@@ -214,6 +214,71 @@ def test_chunk_scan_bwd_dC_cute(dtype, has_seq_idx, has_c):
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_chunk_scan_bwd_ddAcs_stable_cute(dtype):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_chunk_scan import (
+        chunk_scan_bwd_ddAcs_stable_cute,
+    )
+    from mamba_ssm.ops.triton.ssd_chunk_scan import _chunk_scan_bwd_ddAcs_stable
+
+    torch.manual_seed(14)
+    batch, seqlen, nheads, ngroups = 1, 47, 4, 2
+    headdim, chunk_size = 17, 32
+    nchunks = (seqlen + chunk_size - 1) // chunk_size
+    x = torch.randn(batch, seqlen, nheads, headdim, device="cuda", dtype=dtype)
+    dout = torch.randn_like(x)
+    cb = torch.randn(
+        batch,
+        nchunks,
+        ngroups,
+        chunk_size,
+        chunk_size,
+        device="cuda",
+        dtype=dtype,
+    ).tril()
+    dt = torch.rand(batch, nheads, nchunks, chunk_size, device="cuda")
+    dA = -torch.rand_like(dt).cumsum(-1)
+    actual = chunk_scan_bwd_ddAcs_stable_cute(x, dt, dA, dout, cb)
+    expected = _chunk_scan_bwd_ddAcs_stable(x, dt, dA, dout, cb)
+    rtol = 1.2e-2 if dtype == torch.bfloat16 else 7e-3
+    atol = 6e-2 if dtype == torch.bfloat16 else 1.2e-2
+    torch.testing.assert_close(actual, expected, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("has_seq_idx", [False, True])
+def test_chunk_scan_bwd_ddAcs_prev_cute(dtype, has_seq_idx):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_chunk_scan import chunk_scan_bwd_ddAcs_prev_cute
+    from mamba_ssm.ops.triton.ssd_chunk_scan import _chunk_scan_bwd_ddAcs_prev
+
+    torch.manual_seed(15)
+    batch, seqlen, nheads, ngroups = 2, 47, 4, 2
+    headdim, dstate, chunk_size = 17, 19, 32
+    nchunks = (seqlen + chunk_size - 1) // chunk_size
+    prev_states = torch.randn(
+        batch, nchunks, nheads, headdim, dstate, device="cuda", dtype=dtype
+    )
+    C = torch.randn(batch, seqlen, ngroups, dstate, device="cuda", dtype=dtype)
+    dout = torch.randn(batch, seqlen, nheads, headdim, device="cuda", dtype=dtype)
+    dA = -torch.rand(batch, nheads, nchunks, chunk_size, device="cuda").cumsum(-1)
+    seq_idx = None
+    if has_seq_idx:
+        seq_idx = torch.zeros(batch, seqlen, device="cuda", dtype=torch.int32)
+        seq_idx[:, 35:] = 1
+    actual = chunk_scan_bwd_ddAcs_prev_cute(prev_states, C, dout, dA, seq_idx)
+    expected = _chunk_scan_bwd_ddAcs_prev(prev_states, C, dout, dA, seq_idx)
+    rtol = 1e-2 if dtype == torch.bfloat16 else 6e-3
+    atol = 5e-2 if dtype == torch.bfloat16 else 1e-2
+    valid = (
+        torch.arange(nchunks * chunk_size, device="cuda").reshape(nchunks, chunk_size)
+        < seqlen
+    )
+    valid = valid[None, None].expand(batch, nheads, -1, -1)
+    torch.testing.assert_close(actual[valid], expected[valid], rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("d_layout", ["none", "scalar", "vector"])
 def test_chunk_scan_bwd_dx_cute(dtype, d_layout):
     _require_cute()

@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 34,
-    "present_unverified": 33,
+    "missing": 32,
+    "present_unverified": 35,
     "promoted": 2
   },
   "routes": [
@@ -160,17 +160,17 @@
     {
       "group": "ssd",
       "id": "triton.ssd_chunk_scan._chunk_scan_bwd_ddAcs_stable",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/ssd_chunk_scan.py:chunk_scan_bwd_ddAcs_stable_cute",
       "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "_chunk_scan_bwd_ddAcs_stable"
     },
     {
       "group": "ssd",
       "id": "triton.ssd_chunk_scan._chunk_scan_bwd_ddAcs_prev",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/ssd_chunk_scan.py:chunk_scan_bwd_ddAcs_prev_cute",
       "source": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "_chunk_scan_bwd_ddAcs_prev"
     },
     {

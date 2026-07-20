@@ -1422,9 +1422,211 @@ def chunk_scan_bwd_dcb_cute(x, dt, dA_cumsum, dout, seq_idx=None, CB=None, ngrou
     return dcb
 
 
+def chunk_scan_bwd_ddAcs_prev_cute(prev_states, C, dout, dA_cumsum, seq_idx=None):
+    _, ddA_cumsum = chunk_scan_bwd_dC_cute(
+        prev_states, dA_cumsum, dout, seq_idx, C, C.shape[2]
+    )
+    return ddA_cumsum
+
+
+@cache
+def _compile_chunk_scan_bwd_ddacs_stable(
+    x_dtype, dt_dtype, da_dtype, dout_dtype, cb_dtype
+):
+    class ChunkScanBwdDDAStable:
+        @cute.jit
+        def __call__(
+            self,
+            mX: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mDOut: cute.Tensor,
+            mCB: cute.Tensor,
+            mDDA: cute.Tensor,
+            rows: Int64,
+            seqlen: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            stream: cuda.CUstream,
+        ):
+            self.kernel(
+                mX,
+                mDt,
+                mDA,
+                mDOut,
+                mCB,
+                mDDA,
+                rows,
+                seqlen,
+                nheads,
+                ngroups,
+                nchunks,
+                chunk_size,
+                headdim,
+            ).launch(
+                grid=[rows, 1, 1],
+                block=[_NUM_THREADS, 1, 1],
+                smem=_NUM_WARPS * 4,
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(
+            self,
+            mX: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mDOut: cute.Tensor,
+            mCB: cute.Tensor,
+            mDDA: cute.Tensor,
+            rows: Int64,
+            seqlen: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            nchunks: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+        ):
+            feature, _, _ = cute.arch.thread_idx()
+            row, _, _ = cute.arch.block_idx()
+            if Int64(row) < rows:
+                output_pos = Int32(row % chunk_size)
+                outer = row // chunk_size
+                head = Int32(outer % nheads)
+                outer = outer // nheads
+                chunk = Int32(outer % nchunks)
+                batch_idx = Int32(outer // nchunks)
+                group = head // (nheads // ngroups)
+                chunk_start = chunk * chunk_size
+                chunk_limit = min(chunk_size, seqlen - chunk_start)
+                value = Float32(0.0)
+                if feature < headdim and output_pos > 0:
+                    da_base = (
+                        (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                    ) * chunk_size
+                    cb_base = (
+                        ((Int64(batch_idx) * nchunks + chunk) * ngroups + group)
+                        * chunk_size
+                    ) * chunk_size
+                    for target_pos in cutlass.range(
+                        output_pos, chunk_limit, 1, unroll=1
+                    ):
+                        target = chunk_start + target_pos
+                        dout_idx = (
+                            (Int64(batch_idx) * seqlen + target) * nheads + head
+                        ) * headdim + feature
+                        dout = Float32(mDOut[dout_idx])
+                        for source_pos in cutlass.range(0, output_pos, 1, unroll=1):
+                            source = chunk_start + source_pos
+                            x_idx = (
+                                (Int64(batch_idx) * seqlen + source) * nheads + head
+                            ) * headdim + feature
+                            exponent = Float32(mDA[da_base + target_pos]) - Float32(
+                                mDA[da_base + source_pos]
+                            )
+                            if exponent > Float32(0.0):
+                                exponent = Float32(0.0)
+                            value += (
+                                dout
+                                * Float32(mX[x_idx])
+                                * Float32(mDt[da_base + source_pos])
+                                * Float32(
+                                    mCB[cb_base + target_pos * chunk_size + source_pos]
+                                )
+                                * cute.math.exp2(
+                                    exponent * Float32(_LOG2E), fastmath=True
+                                )
+                            )
+                smem = cutlass.utils.SmemAllocator()
+                reduction_buffer = smem.allocate_tensor(
+                    Float32,
+                    cute.make_layout((1, (_NUM_WARPS, 1))),
+                    byte_alignment=16,
+                )
+                total = row_reduce(
+                    value,
+                    cute.ReductionOp.ADD,
+                    _NUM_THREADS,
+                    reduction_buffer=reduction_buffer,
+                )
+                if cute.arch.warp_idx() == 0 and cute.arch.lane_idx() == 0:
+                    da_idx = (
+                        (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                    ) * chunk_size + output_pos
+                    mDDA[da_idx] = total
+
+    def fake(dtype):
+        return cute.runtime.make_fake_tensor(
+            dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+        )
+
+    return cute.compile(
+        ChunkScanBwdDDAStable(),
+        fake(x_dtype),
+        fake(dt_dtype),
+        fake(da_dtype),
+        fake(dout_dtype),
+        fake(cb_dtype),
+        fake(Float32),
+        Int64(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+        options="--enable-tvm-ffi",
+    )
+
+
+def chunk_scan_bwd_ddAcs_stable_cute(x, dt, dA_cumsum, dout, cb):
+    batch, seqlen, nheads, headdim = x.shape
+    _, _, nchunks, chunk_size = dt.shape
+    ngroups = cb.shape[2]
+    tensors = (x, dt, dA_cumsum, dout, cb)
+    if (
+        headdim > _NUM_THREADS
+        or nheads % ngroups != 0
+        or any(not t.is_cuda or not t.is_contiguous() for t in tensors)
+    ):
+        from mamba_ssm.ops.triton.ssd_chunk_scan import _chunk_scan_bwd_ddAcs_stable
+
+        return _chunk_scan_bwd_ddAcs_stable(x, dt, dA_cumsum, dout, cb)
+    ddA = torch.empty_like(dA_cumsum, dtype=torch.float32)
+    compiled = _compile_chunk_scan_bwd_ddacs_stable(
+        torch2cute_dtype_map[x.dtype],
+        torch2cute_dtype_map[dt.dtype],
+        torch2cute_dtype_map[dA_cumsum.dtype],
+        torch2cute_dtype_map[dout.dtype],
+        torch2cute_dtype_map[cb.dtype],
+    )
+    compiled(
+        x.view(-1),
+        dt.view(-1),
+        dA_cumsum.view(-1),
+        dout.view(-1),
+        cb.view(-1),
+        ddA.view(-1),
+        batch * nchunks * nheads * chunk_size,
+        seqlen,
+        nheads,
+        ngroups,
+        nchunks,
+        chunk_size,
+        headdim,
+    )
+    return ddA
+
+
 __all__ = [
     "chunk_scan_bwd_dC_cute",
     "chunk_scan_bwd_dcb_cute",
+    "chunk_scan_bwd_ddAcs_prev_cute",
+    "chunk_scan_bwd_ddAcs_stable_cute",
     "chunk_scan_bwd_dstates_cute",
     "chunk_scan_bwd_dz_cute",
     "chunk_scan_bwd_dx_cute",
