@@ -208,6 +208,10 @@ CUTE_ROUTES = {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/ssd_state_passing.py:state_passing_fwd_cute",
     },
+    "triton.ssd_state_passing._state_passing_bwd": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/ssd_state_passing.py:state_passing_bwd_cute",
+    },
     "triton.mamba3.grouped_head_reduction.reduce_grouped_qk_grads": {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/mamba3/grouped_head_reduction.py:reduce_grouped_qk_grads_cute",

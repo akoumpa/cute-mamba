@@ -29,3 +29,37 @@ def test_state_passing_fwd_cute(dtype, has_initial, has_seq_idx):
     expected = _state_passing_fwd(states, decay, initial, seq_idx, chunk_size)
     torch.testing.assert_close(actual[0], expected[0], rtol=2e-3, atol=2e-3)
     torch.testing.assert_close(actual[1], expected[1], rtol=2e-3, atol=2e-3)
+
+
+@pytest.mark.parametrize("has_final,has_initial,convert_states", [(False, False, False), (True, True, False), (True, True, True)])
+def test_state_passing_bwd_cute(has_final, has_initial, convert_states):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_state_passing import state_passing_bwd_cute
+    from mamba_ssm.ops.triton.ssd_state_passing import _state_passing_bwd
+
+    torch.manual_seed(1)
+    batch, nchunks, nheads, dim = 2, 5, 3, 513
+    states = torch.randn(batch, nchunks, nheads, dim, device="cuda", dtype=torch.bfloat16)
+    decay = -torch.rand(batch, nheads, nchunks, device="cuda")
+    dout = torch.randn_like(states)
+    dfinal = torch.randn(batch, nheads, dim, device="cuda") if has_final else None
+    states_dtype = torch.float32 if convert_states else None
+    actual = state_passing_bwd_cute(
+        states,
+        decay,
+        dout,
+        dfinal,
+        has_initial_states=has_initial,
+        states_dtype=states_dtype,
+    )
+    expected = _state_passing_bwd(
+        states,
+        decay,
+        dout,
+        dfinal,
+        has_initial_states=has_initial,
+        states_dtype=states_dtype,
+    )
+    for actual_tensor, expected_tensor in zip(actual, expected):
+        if actual_tensor is not None:
+            torch.testing.assert_close(actual_tensor, expected_tensor, rtol=4e-3, atol=5e-3)

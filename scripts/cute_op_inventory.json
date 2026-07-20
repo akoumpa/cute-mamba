@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 61,
-    "present_unverified": 6,
+    "missing": 60,
+    "present_unverified": 7,
     "promoted": 2
   },
   "routes": [
@@ -256,9 +256,9 @@
     {
       "group": "ssd",
       "id": "triton.ssd_state_passing._state_passing_bwd",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/ssd_state_passing.py:state_passing_bwd_cute",
       "source": "mamba_ssm/ops/triton/ssd_state_passing.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "_state_passing_bwd"
     },
     {
