@@ -248,6 +248,10 @@ CUTE_ROUTES = {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/ssd_chunk_scan.py:chunk_scan_fwd_cute",
     },
+    "triton.ssd_chunk_scan._chunk_scan_bwd_dz": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/ssd_chunk_scan.py:chunk_scan_bwd_dz_cute",
+    },
     "triton.ssd_state_passing._state_passing_fwd": {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/ssd_state_passing.py:state_passing_fwd_cute",
