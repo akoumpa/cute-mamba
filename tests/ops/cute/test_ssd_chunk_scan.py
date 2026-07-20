@@ -137,3 +137,51 @@ def test_chunk_scan_bwd_dstates_cute(dtype, has_seq_idx, output_in_fp32):
     rtol = 1e-2 if dtype == torch.bfloat16 else 6e-3
     atol = 5e-2 if dtype == torch.bfloat16 else 1e-2
     torch.testing.assert_close(actual, expected, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("has_seq_idx", [False, True])
+@pytest.mark.parametrize("has_c", [False, True])
+def test_chunk_scan_bwd_dC_cute(dtype, has_seq_idx, has_c):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_chunk_scan import chunk_scan_bwd_dC_cute
+    from mamba_ssm.ops.triton.ssd_chunk_scan import _chunk_scan_bwd_dC
+
+    torch.manual_seed(11)
+    batch, seqlen, nheads, ngroups = 2, 47, 4, 2
+    headdim, dstate, chunk_size = 17, 19, 32
+    nchunks = (seqlen + chunk_size - 1) // chunk_size
+    prev_states = torch.randn(
+        batch, nchunks, nheads, headdim, dstate, device="cuda", dtype=dtype
+    )
+    dout = torch.randn(batch, seqlen, nheads, headdim, device="cuda", dtype=dtype)
+    dA = -torch.rand(batch, nheads, nchunks, chunk_size, device="cuda").cumsum(-1)
+    seq_idx = None
+    if has_seq_idx:
+        seq_idx = torch.zeros(batch, seqlen, device="cuda", dtype=torch.int32)
+        seq_idx[:, 35:] = 1
+    C = (
+        torch.randn(batch, seqlen, ngroups, dstate, device="cuda", dtype=dtype)
+        if has_c
+        else None
+    )
+    actual = chunk_scan_bwd_dC_cute(prev_states, dA, dout, seq_idx, C, ngroups)
+    expected = _chunk_scan_bwd_dC(prev_states, dA, dout, seq_idx, C, ngroups)
+    actual_tensors = actual if isinstance(actual, tuple) else (actual,)
+    expected_tensors = expected if isinstance(expected, tuple) else (expected,)
+    rtol = 1e-2 if dtype == torch.bfloat16 else 6e-3
+    atol = 5e-2 if dtype == torch.bfloat16 else 1e-2
+    for output_idx, (actual_tensor, expected_tensor) in enumerate(
+        zip(actual_tensors, expected_tensors)
+    ):
+        if has_c and output_idx == 1:
+            valid = (
+                torch.arange(nchunks * chunk_size, device="cuda").reshape(
+                    nchunks, chunk_size
+                )
+                < seqlen
+            )
+            valid = valid[None, None].expand(batch, nheads, -1, -1)
+            actual_tensor = actual_tensor[valid]
+            expected_tensor = expected_tensor[valid]
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)
