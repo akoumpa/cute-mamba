@@ -640,6 +640,277 @@ def _compile_chunk_state_fwd(
     )
 
 
+def _can_use_chunk_state_gemm(B, x, dt, dA_cumsum, seq_idx):
+    batch, seqlen, nheads, headdim = x.shape
+    _, _, nchunks, chunk_size = dt.shape
+    _, _, ngroups, dstate = B.shape
+    return (
+        seq_idx is None
+        and B.dtype == x.dtype
+        and B.dtype in (torch.float16, torch.bfloat16)
+        and seqlen == nchunks * chunk_size
+        and min(chunk_size, headdim, dstate) % 8 == 0
+        and nheads % ngroups == 0
+        and batch > 0
+    )
+
+
+def _compile_chunk_state_pack(x_dtype, b_dtype, dt_dtype, da_dtype):
+    tile_size = 32
+    items_per_thread = tile_size * tile_size // _NUM_THREADS
+
+    class ChunkStatePackTiled:
+        @cute.jit
+        def __call__(
+            self,
+            mX: cute.Tensor,
+            mB: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mXGemm: cute.Tensor,
+            mBGemm: cute.Tensor,
+            batch: Int32,
+            nchunks: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            dstate: Int32,
+            stream: cuda.CUstream,
+        ):
+            matrices = Int64(batch) * nchunks * nheads
+            token_tiles = cute.ceil_div(chunk_size, tile_size)
+            x_tiles_per_matrix = token_tiles * cute.ceil_div(headdim, tile_size)
+            b_tiles_per_matrix = token_tiles * cute.ceil_div(dstate, tile_size)
+            x_blocks = matrices * x_tiles_per_matrix
+            b_blocks = matrices * b_tiles_per_matrix
+            self.kernel(
+                mX,
+                mB,
+                mDt,
+                mDA,
+                mXGemm,
+                mBGemm,
+                x_blocks,
+                b_blocks,
+                nchunks,
+                nheads,
+                ngroups,
+                chunk_size,
+                headdim,
+                dstate,
+                token_tiles,
+                x_tiles_per_matrix,
+                b_tiles_per_matrix,
+            ).launch(
+                grid=[x_blocks + b_blocks, 1, 1],
+                block=[_NUM_THREADS, 1, 1],
+                smem=4096,
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(
+            self,
+            mX: cute.Tensor,
+            mB: cute.Tensor,
+            mDt: cute.Tensor,
+            mDA: cute.Tensor,
+            mXGemm: cute.Tensor,
+            mBGemm: cute.Tensor,
+            x_blocks: Int64,
+            b_blocks: Int64,
+            nchunks: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            chunk_size: Int32,
+            headdim: Int32,
+            dstate: Int32,
+            token_tiles: Int32,
+            x_tiles_per_matrix: Int32,
+            b_tiles_per_matrix: Int32,
+        ):
+            tidx, _, _ = cute.arch.thread_idx()
+            block, _, _ = cute.arch.block_idx()
+            smem = cutlass.utils.SmemAllocator()
+            tile_layout = cute.make_ordered_layout(
+                (tile_size, tile_size + 1), order=(1, 0)
+            )
+            sTile = smem.allocate_tensor(x_dtype, tile_layout, byte_alignment=16)
+            sScale = smem.allocate_tensor(
+                Float32, cute.make_layout((tile_size,)), byte_alignment=16
+            )
+
+            if Int64(block) < x_blocks:
+                matrix = Int64(block) // x_tiles_per_matrix
+                tile = Int32(Int64(block) - matrix * x_tiles_per_matrix)
+                feature_tile = tile // token_tiles
+                token_tile = tile - feature_tile * token_tiles
+                head = Int32(matrix % nheads)
+                outer = matrix // nheads
+                chunk = Int32(outer % nchunks)
+                batch_idx = Int32(outer // nchunks)
+                for item in cutlass.range_constexpr(items_per_thread):
+                    elem = tidx + item * _NUM_THREADS
+                    token_local = elem // tile_size
+                    feature_local = elem - token_local * tile_size
+                    pos = token_tile * tile_size + token_local
+                    feature = feature_tile * tile_size + feature_local
+                    value = x_dtype(0.0)
+                    if pos < chunk_size and feature < headdim:
+                        token = chunk * chunk_size + pos
+                        src = (
+                            (Int64(batch_idx) * nchunks * chunk_size + token) * nheads
+                            + head
+                        ) * headdim + feature
+                        value = mX[src]
+                    sTile[token_local, feature_local] = value
+                cute.arch.sync_threads()
+                for item in cutlass.range_constexpr(items_per_thread):
+                    elem = tidx + item * _NUM_THREADS
+                    feature_local = elem // tile_size
+                    token_local = elem - feature_local * tile_size
+                    pos = token_tile * tile_size + token_local
+                    feature = feature_tile * tile_size + feature_local
+                    if pos < chunk_size and feature < headdim:
+                        out_idx = (matrix * headdim + feature) * chunk_size + pos
+                        mXGemm[out_idx] = sTile[token_local, feature_local]
+            elif Int64(block) < x_blocks + b_blocks:
+                local_block = Int64(block) - x_blocks
+                matrix = local_block // b_tiles_per_matrix
+                tile = Int32(local_block - matrix * b_tiles_per_matrix)
+                feature_tile = tile // token_tiles
+                token_tile = tile - feature_tile * token_tiles
+                head = Int32(matrix % nheads)
+                outer = matrix // nheads
+                chunk = Int32(outer % nchunks)
+                batch_idx = Int32(outer // nchunks)
+                group = head // (nheads // ngroups)
+                if tidx < tile_size:
+                    pos = token_tile * tile_size + tidx
+                    scale = Float32(0.0)
+                    if pos < chunk_size:
+                        scale_idx = (
+                            (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                        ) * chunk_size + pos
+                        last_idx = scale_idx - pos + chunk_size - 1
+                        exponent = Float32(mDA[last_idx]) - Float32(mDA[scale_idx])
+                        if exponent > Float32(0.0):
+                            exponent = Float32(0.0)
+                        scale = cute.math.exp2(
+                            exponent * Float32(_LOG2E), fastmath=True
+                        )
+                        scale *= Float32(mDt[scale_idx])
+                    sScale[tidx] = scale
+                cute.arch.sync_threads()
+                for item in cutlass.range_constexpr(items_per_thread):
+                    elem = tidx + item * _NUM_THREADS
+                    token_local = elem // tile_size
+                    feature_local = elem - token_local * tile_size
+                    pos = token_tile * tile_size + token_local
+                    feature = feature_tile * tile_size + feature_local
+                    value = b_dtype(0.0)
+                    if pos < chunk_size and feature < dstate:
+                        token = chunk * chunk_size + pos
+                        b_idx = (
+                            (Int64(batch_idx) * nchunks * chunk_size + token) * ngroups
+                            + group
+                        ) * dstate + feature
+                        value = b_dtype(Float32(mB[b_idx]) * sScale[token_local])
+                    sTile[token_local, feature_local] = value
+                cute.arch.sync_threads()
+                for item in cutlass.range_constexpr(items_per_thread):
+                    elem = tidx + item * _NUM_THREADS
+                    feature_local = elem // tile_size
+                    token_local = elem - feature_local * tile_size
+                    pos = token_tile * tile_size + token_local
+                    feature = feature_tile * tile_size + feature_local
+                    if pos < chunk_size and feature < dstate:
+                        out_idx = (matrix * dstate + feature) * chunk_size + pos
+                        mBGemm[out_idx] = sTile[token_local, feature_local]
+
+    def fake(dtype):
+        return cute.runtime.make_fake_tensor(
+            dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+        )
+
+    return cute.compile(
+        ChunkStatePackTiled(),
+        fake(x_dtype),
+        fake(b_dtype),
+        fake(dt_dtype),
+        fake(da_dtype),
+        fake(x_dtype),
+        fake(b_dtype),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+        options="--enable-tvm-ffi",
+    )
+
+
+def _chunk_state_fwd_gemm(B, x, dt, dA_cumsum, states):
+    from quack.gemm import gemm
+
+    batch, seqlen, nheads, headdim = x.shape
+    _, _, nchunks, chunk_size = dt.shape
+    _, _, ngroups, dstate = B.shape
+    x_gemm = torch.empty(
+        batch * nchunks * nheads,
+        headdim,
+        chunk_size,
+        device=x.device,
+        dtype=x.dtype,
+    )
+    b_gemm = torch.empty(
+        batch * nchunks * nheads,
+        dstate,
+        chunk_size,
+        device=B.device,
+        dtype=B.dtype,
+    )
+    compiled = _compile_chunk_state_pack(
+        torch2cute_dtype_map[x.dtype],
+        torch2cute_dtype_map[B.dtype],
+        torch2cute_dtype_map[dt.dtype],
+        torch2cute_dtype_map[dA_cumsum.dtype],
+    )
+    compiled(
+        x.view(-1),
+        B.view(-1),
+        dt.view(-1),
+        dA_cumsum.view(-1),
+        x_gemm.view(-1),
+        b_gemm.view(-1),
+        batch,
+        nchunks,
+        nheads,
+        ngroups,
+        chunk_size,
+        headdim,
+        dstate,
+    )
+    gemm(
+        x_gemm,
+        b_gemm,
+        states.view(-1, headdim, dstate),
+        None,
+        None,
+        128,
+        128,
+        1,
+        1,
+        False,
+        persistent=False,
+    )
+    return states
+
+
 def chunk_state_fwd_cute(
     B, x, dt, dA_cumsum, seq_idx=None, states=None, states_in_fp32=True
 ):
@@ -666,6 +937,8 @@ def chunk_state_fwd_cute(
             device=x.device,
             dtype=torch.float32 if states_in_fp32 else B.dtype,
         )
+    if _can_use_chunk_state_gemm(B, x, dt, dA_cumsum, seq_idx):
+        return _chunk_state_fwd_gemm(B, x, dt, dA_cumsum, states)
     compiled = _compile_chunk_state_fwd(
         torch2cute_dtype_map[B.dtype],
         torch2cute_dtype_map[x.dtype],

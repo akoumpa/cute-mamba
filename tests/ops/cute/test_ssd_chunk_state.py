@@ -103,6 +103,32 @@ def test_chunk_state_fwd_cute(dtype, has_seq_idx, states_in_fp32):
     torch.testing.assert_close(actual, expected, rtol=5e-3, atol=7e-3)
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("ngroups", [1, 2])
+@pytest.mark.parametrize("states_in_fp32", [False, True])
+def test_chunk_state_fwd_gemm_cute(dtype, ngroups, states_in_fp32):
+    _require_cute()
+    from mamba_ssm.ops.cute.ssd_chunk_state import chunk_state_fwd_cute
+    from mamba_ssm.ops.triton.ssd_chunk_state import _chunk_state_fwd
+
+    torch.manual_seed(7)
+    batch, seqlen, nheads = 2, 64, 4
+    headdim, dstate, chunk_size = 32, 24, 32
+    nchunks = seqlen // chunk_size
+    x = torch.randn(batch, seqlen, nheads, headdim, device="cuda", dtype=dtype)
+    B = torch.randn(batch, seqlen, ngroups, dstate, device="cuda", dtype=dtype)
+    dt = torch.rand(batch, nheads, nchunks, chunk_size, device="cuda")
+    dA = -torch.rand_like(dt).cumsum(-1)
+    output_dtype = torch.float32 if states_in_fp32 else dtype
+    buffer = torch.empty(
+        batch, nchunks, nheads, headdim, dstate, device="cuda", dtype=output_dtype
+    )
+    actual = chunk_state_fwd_cute(B, x, dt, dA, states=buffer)
+    expected = _chunk_state_fwd(B, x, dt, dA, states_in_fp32=states_in_fp32)
+    assert actual.data_ptr() == buffer.data_ptr()
+    torch.testing.assert_close(actual, expected, rtol=5e-3, atol=7e-3)
+
+
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_chunk_state_bwd_dx_cute(dtype):
     _require_cute()
