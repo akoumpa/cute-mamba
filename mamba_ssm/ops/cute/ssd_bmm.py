@@ -23,6 +23,24 @@ def _chunk_view(x, chunk_size):
     return x.view(batch * (seqlen // chunk_size), chunk_size, x.shape[-1])
 
 
+def _gemm_sm90_nonpersistent(a, b, out, *, tile_n):
+    from quack.gemm import gemm
+
+    gemm(
+        a,
+        b,
+        out,
+        None,
+        None,
+        tile_n,
+        128,
+        1,
+        1,
+        False,
+        persistent=False,
+    )
+
+
 def _bmm_chunk_fwd_cute(
     a,
     b,
@@ -38,18 +56,18 @@ def _bmm_chunk_fwd_cute(
 
         return _bmm_chunk_fwd(a, b, chunk_size, seq_idx, causal, output_dtype)
 
-    from quack.gemm_interface import gemm
-
     batch, seqlen = a.shape[:2]
     nchunks = seqlen // chunk_size
     a_chunks = _chunk_view(a, chunk_size)
-    b_chunks_t = _chunk_view(b, chunk_size).transpose(-1, -2)
-    out = gemm(
-        a_chunks,
-        b_chunks_t,
-        out_dtype=a.dtype if output_dtype is None else output_dtype,
-        tuned=False,
+    b_chunks = _chunk_view(b, chunk_size)
+    out = torch.empty(
+        batch * nchunks,
+        chunk_size,
+        chunk_size,
+        device=a.device,
+        dtype=a.dtype if output_dtype is None else output_dtype,
     )
+    _gemm_sm90_nonpersistent(a_chunks, b_chunks, out, tile_n=128)
     out = out.view(batch, nchunks, chunk_size, chunk_size)
     return out if a.dim() == 3 else out.unsqueeze(2)
 
@@ -61,8 +79,6 @@ def _bmm_chunk_bwd_cute(a, dout, residual=None, out=None):
 
         return _bmm_chunk_bwd(a, dout, residual, out)
 
-    from quack.gemm_interface import gemm
-
     batch, seqlen = a.shape[:2]
     nchunks = seqlen // chunk_size
     a_chunks = _chunk_view(a, chunk_size)
@@ -71,11 +87,12 @@ def _bmm_chunk_bwd_cute(a, dout, residual=None, out=None):
     out_view = None
     if out is not None:
         out_view = _chunk_view(out, chunk_size)
-    result = gemm(
+    result = torch.empty_like(a_chunks) if out_view is None else out_view
+    _gemm_sm90_nonpersistent(
         dout_chunks.transpose(-1, -2),
-        a_chunks,
-        out=out_view,
-        tuned=False,
+        a_chunks.transpose(-1, -2),
+        result,
+        tile_n=128,
     )
     result = result.view(batch, seqlen, a.shape[-1])
     if a.dim() == 4:
