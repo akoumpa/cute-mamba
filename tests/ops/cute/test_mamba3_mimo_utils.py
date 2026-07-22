@@ -171,3 +171,44 @@ def test_mamba3_mimo_utils_varlen_cute(dtype):
     )
     for actual_tensor, expected_tensor in zip(actual_trap, expected_trap):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=2e-3, atol=3e-3)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_bwd_dadt_varlen_low_precision_cute(dtype):
+    _require_cuda()
+    from mamba_ssm.ops.cute.mamba3.mamba3_mimo_utils import (
+        bwd_dadt_fused_cute_varlen,
+    )
+    from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import (
+        bwd_dadt_fused_triton_varlen,
+    )
+
+    torch.manual_seed(4)
+    batch, nheads, seqlen, chunk_size = 1, 2, 75, 16
+    cu = torch.tensor([0, 23, 23, 75], device="cuda", dtype=torch.int32)
+    nchunks = seqlen // chunk_size + cu.numel() - 1
+    matrices = [
+        torch.randn(
+            batch,
+            nheads,
+            nchunks,
+            chunk_size,
+            chunk_size,
+            device="cuda",
+            dtype=dtype,
+        )
+        * 0.1
+        for _ in range(2)
+    ]
+    vectors = [
+        torch.randn(batch, nheads, seqlen, device="cuda", dtype=dtype) for _ in range(4)
+    ]
+    actual = bwd_dadt_fused_cute_varlen(*matrices, *vectors, chunk_size, cu)
+    expected = bwd_dadt_fused_triton_varlen(
+        *(tensor.float() for tensor in matrices),
+        *(tensor.float() for tensor in vectors),
+        chunk_size,
+        cu,
+    )
+    atol = 1e-1 if dtype == torch.bfloat16 else 2e-2
+    torch.testing.assert_close(actual, expected, rtol=2e-2, atol=atol)

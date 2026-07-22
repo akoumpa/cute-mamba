@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import torch
-import torch.nn.functional as F
 
 
 def compute_dacs_segsum_cute(da, chunk_size):
@@ -82,30 +81,27 @@ def bwd_dadt_fused_cute_varlen(
     chunk_size,
     cu_seqlens,
 ):
-    batch, nheads, seqlen = ddA_cs.shape
-    out = torch.zeros(batch, nheads, seqlen, device=ddA_cs.device, dtype=torch.float32)
-    for sequence, (start, end) in enumerate(_sequence_ranges(cu_seqlens)):
-        length = end - start
-        if not length:
-            continue
-        chunks = length // chunk_size + 1
-        padded_length = chunks * chunk_size
+    if chunk_size <= 64:
+        from mamba_ssm.ops.cute.mamba3.dadt_backward import bwd_dadt_varlen_cute
 
-        def pad(x):
-            return F.pad(x[..., start:end], (0, padded_length - length))
-
-        global_start = start // chunk_size + sequence
-        seq_out = bwd_dadt_fused_cute(
-            dSSdA[..., global_start : global_start + chunks, :, :],
-            SSdA[..., global_start : global_start + chunks, :, :],
-            pad(ddA_cs),
-            pad(ddA_cs_rev),
-            pad(dA_cs),
-            pad(dA_cs_rev),
-            chunk_size,
+        return bwd_dadt_varlen_cute(
+            dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev, cu_seqlens
         )
-        out[..., start:end] = seq_out[..., :length]
-    return out
+
+    from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import (
+        bwd_dadt_fused_triton_varlen,
+    )
+
+    return bwd_dadt_fused_triton_varlen(
+        dSSdA,
+        SSdA,
+        ddA_cs,
+        ddA_cs_rev,
+        dA_cs,
+        dA_cs_rev,
+        chunk_size,
+        cu_seqlens,
+    )
 
 
 def bwd_dtrap_ddt_cute_varlen(trap, dt, dfactor, dgamma_diag, chunk_size, cu_seqlens):

@@ -421,7 +421,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:compute_dacs_segsum_cute",
     },
     "triton.mamba3.mamba3_mimo_utils.bwd_dadt_fused_triton_varlen": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dadt_fused_cute_varlen",
     },
     "triton.mamba3.mamba3_mimo_utils.bwd_dtrap_ddt_triton_varlen": {

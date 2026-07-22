@@ -4,6 +4,7 @@ import triton
 
 from mamba_ssm.ops.cute.mamba3.mamba3_mimo_utils import (
     bwd_dadt_fused_cute,
+    bwd_dadt_fused_cute_varlen,
     bwd_dtrap_ddt_cute,
     bwd_dtrap_ddt_cute_varlen,
     compute_dacs_segsum_cute,
@@ -11,6 +12,7 @@ from mamba_ssm.ops.cute.mamba3.mamba3_mimo_utils import (
 )
 from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import (
     bwd_dadt_fused_triton,
+    bwd_dadt_fused_triton_varlen,
     bwd_dtrap_ddt_triton,
     bwd_dtrap_ddt_triton_varlen,
     compute_dacs_segsum_triton,
@@ -33,6 +35,34 @@ def bwd_dadt_eager(dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev):
     ).tril(-1)
     term_seg = weighted.flip(-2).cumsum(-2).flip(-2).masked_fill(~mask, 0).sum(-1)
     return (term_cs.float() + term_rev.float() + term_seg).flatten(-2)
+
+
+def bwd_dadt_varlen_eager(
+    dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev, chunk_size, cu_seqlens
+):
+    out = torch.zeros_like(ddA_cs, dtype=torch.float32)
+    offsets = cu_seqlens.detach().cpu().tolist()
+    for sequence, (start, end) in enumerate(zip(offsets[:-1], offsets[1:])):
+        length = end - start
+        if not length:
+            continue
+        chunks = length // chunk_size + 1
+        padded_length = chunks * chunk_size
+
+        def pad(tensor):
+            return F.pad(tensor[..., start:end], (0, padded_length - length))
+
+        global_start = start // chunk_size + sequence
+        seq_out = bwd_dadt_eager(
+            dSSdA[..., global_start : global_start + chunks, :, :],
+            SSdA[..., global_start : global_start + chunks, :, :],
+            pad(ddA_cs),
+            pad(ddA_cs_rev),
+            pad(dA_cs),
+            pad(dA_cs_rev),
+        )
+        out[..., start:end] = seq_out[..., :length]
+    return out
 
 
 def benchmark_dtrap_ddt():
@@ -142,9 +172,59 @@ def benchmark_dacs_segsum_varlen():
             )
 
 
+def benchmark_dadt_varlen():
+    for dtype in (torch.float32, torch.float16, torch.bfloat16):
+        for num_sequences in (2, 8, 32):
+            lengths = torch.full(
+                (num_sequences,), 128, device="cuda", dtype=torch.int32
+            )
+            cu_seqlens = torch.cat(
+                (torch.zeros(1, device="cuda", dtype=torch.int32), lengths.cumsum(0))
+            )
+            seqlen = int(cu_seqlens[-1])
+            chunk_size = 64
+            nchunks = seqlen // chunk_size + num_sequences
+            matrices = [
+                torch.randn(
+                    1,
+                    16,
+                    nchunks,
+                    chunk_size,
+                    chunk_size,
+                    device="cuda",
+                    dtype=dtype,
+                )
+                * 0.1
+                for _ in range(2)
+            ]
+            vectors = [
+                torch.randn(1, 16, seqlen, device="cuda", dtype=dtype) for _ in range(4)
+            ]
+            args = matrices + vectors
+            cute_ms = bench(
+                lambda: bwd_dadt_fused_cute_varlen(*args, chunk_size, cu_seqlens)
+            )
+            if dtype == torch.float32:
+                baseline_ms = bench(
+                    lambda: bwd_dadt_fused_triton_varlen(*args, chunk_size, cu_seqlens)
+                )
+                baseline_name = "triton"
+            else:
+                baseline_ms = bench(
+                    lambda: bwd_dadt_varlen_eager(*args, chunk_size, cu_seqlens)
+                )
+                baseline_name = "eager"
+            print(
+                f"dadt_varlen dtype={dtype} sequences={num_sequences}: "
+                f"cute={cute_ms:.4f} ms {baseline_name}={baseline_ms:.4f} ms "
+                f"speedup={baseline_ms / cute_ms:.3f}x"
+            )
+
+
 if __name__ == "__main__":
     benchmark_dtrap_ddt()
     benchmark_dtrap_ddt_varlen()
     benchmark_dacs_segsum()
     benchmark_dadt()
     benchmark_dacs_segsum_varlen()
+    benchmark_dadt_varlen()
