@@ -33,18 +33,22 @@ def test_angle_dt_fwd_cute(dtype, varlen):
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_angle_dt_fwd_chunked_cute(dtype):
+@pytest.mark.parametrize("varlen", [False, True])
+def test_angle_dt_fwd_chunked_cute(dtype, varlen):
     _require_cute()
     from mamba_ssm.ops.cute.mamba3.angle_dt import angle_dt_fwd_cute
     from mamba_ssm.ops.triton.mamba3.angle_dt import angle_dt_fwd
 
     torch.manual_seed(2)
-    batch, seqlen, nheads, dim = 2, 128, 4, 32
+    batch, seqlen, nheads, dim = (1, 130, 4, 32) if varlen else (2, 128, 4, 32)
     angle = torch.randn(batch, seqlen, nheads, dim, device="cuda", dtype=dtype)
     dt = torch.randn(batch, nheads, seqlen, device="cuda", dtype=dtype)
-    initial = torch.randn(batch, nheads, dim, device="cuda")
-    actual = angle_dt_fwd_cute(angle, dt, initial, 64, True)
-    expected = angle_dt_fwd(angle, dt, initial, 64, True)
+    cu_seqlens = (
+        torch.tensor([0, 63, 130], device="cuda", dtype=torch.int32) if varlen else None
+    )
+    initial = torch.randn(2 if varlen else batch, nheads, dim, device="cuda")
+    actual = angle_dt_fwd_cute(angle, dt, initial, 64, True, cu_seqlens)
+    expected = angle_dt_fwd(angle, dt, initial, 64, True, cu_seqlens)
     rtol, atol = (5e-3, 2e-2) if dtype == torch.bfloat16 else (3e-3, 5e-3)
     torch.testing.assert_close(actual[0], expected[0], rtol=rtol, atol=atol)
     torch.testing.assert_close(actual[1], expected[1], rtol=rtol, atol=atol)
@@ -76,19 +80,25 @@ def test_angle_dt_bwd_cute(dtype, varlen):
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_angle_dt_bwd_chunked_cute(dtype):
+@pytest.mark.parametrize("varlen", [False, True])
+def test_angle_dt_bwd_chunked_cute(dtype, varlen):
     _require_cute()
     from mamba_ssm.ops.cute.mamba3.angle_dt import angle_dt_bwd_cute
     from mamba_ssm.ops.triton.mamba3.angle_dt import angle_dt_bwd
 
     torch.manual_seed(3)
-    batch, seqlen, nheads, dim = 2, 128, 4, 32
+    batch, seqlen, nheads, dim = (1, 130, 4, 32) if varlen else (2, 128, 4, 32)
     angle = torch.randn(batch, seqlen, nheads, dim, device="cuda", dtype=dtype)
     dt = torch.randn(batch, nheads, seqlen, device="cuda", dtype=dtype)
     grad_out = torch.randn_like(angle)
-    grad_final = torch.randn(batch, nheads, dim, device="cuda", dtype=dtype)
-    actual = angle_dt_bwd_cute(grad_out, angle, dt, True, 64, grad_final)
-    expected = angle_dt_bwd(grad_out, angle, dt, True, 64, grad_final)
+    cu_seqlens = (
+        torch.tensor([0, 63, 130], device="cuda", dtype=torch.int32) if varlen else None
+    )
+    grad_final = torch.randn(
+        2 if varlen else batch, nheads, dim, device="cuda", dtype=dtype
+    )
+    actual = angle_dt_bwd_cute(grad_out, angle, dt, True, 64, grad_final, cu_seqlens)
+    expected = angle_dt_bwd(grad_out, angle, dt, True, 64, grad_final, cu_seqlens)
     rtol, atol = (6e-3, 3e-2) if dtype == torch.bfloat16 else (4e-3, 8e-3)
     for actual_tensor, expected_tensor in zip(actual, expected):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)
