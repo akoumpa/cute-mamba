@@ -78,3 +78,19 @@ def test_bmm_chunk_fwd_dispatches_large_aligned_workload(monkeypatch):
 
     a = torch.empty(8, 2048, 64, device="cuda", dtype=torch.bfloat16)
     assert triton_bmm._bmm_chunk_fwd(a, a, 256) is sentinel
+
+
+def test_bmm_chunk_bwd_dispatches_narrow_aligned_workload(monkeypatch):
+    _require_cute()
+    import mamba_ssm.ops.cute.ssd_bmm as cute_bmm
+    import mamba_ssm.ops.triton.ssd_bmm as triton_bmm
+
+    sentinel = object()
+    monkeypatch.setattr(triton_bmm, "is_cute_dsl_available", lambda: True)
+    monkeypatch.setattr(
+        cute_bmm, "_bmm_chunk_bwd_cute", lambda *args, **kwargs: sentinel
+    )
+
+    a = torch.empty(1, 2048, 1, 64, device="cuda", dtype=torch.float16)
+    dout = torch.empty(1, 8, 1, 256, 256, device="cuda", dtype=torch.float16)
+    assert triton_bmm._bmm_chunk_bwd(a, dout) is sentinel

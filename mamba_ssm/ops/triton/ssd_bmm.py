@@ -247,6 +247,22 @@ def _bmm_chunk_bwd(a, dout, residual=None, out=None):
     else:
         batch, seqlen, ngroups, k = a.shape
     nchunks, chunk_size = dout.shape[1], dout.shape[-1]
+    use_cute = (
+        is_cute_dsl_available()
+        and a.dtype in (torch.float16, torch.bfloat16)
+        and dout.dtype == a.dtype
+        and a.stride(-1) == 1
+        and dout.stride(-1) == 1
+        and k == 64
+        and chunk_size == 256
+        and batch * nchunks == 8
+        and residual is None
+        and (not has_groups or ngroups == 1)
+    )
+    if use_cute:
+        from mamba_ssm.ops.cute.ssd_bmm import _bmm_chunk_bwd_cute
+
+        return _bmm_chunk_bwd_cute(a, dout, out=out)
     if a.stride(-1) != 1 and a.stride(-2) != 1:
         a = a.contiguous()
     if dout.stride(-1) != 1 and dout.stride(-2) != 1:

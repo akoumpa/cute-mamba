@@ -89,7 +89,13 @@ def _bmm_chunk_bwd_cute(a, dout, residual=None, out=None):
     if out is not None:
         out_view = _chunk_view(out, chunk_size)
     result = torch.empty_like(a_chunks) if out_view is None else out_view
-    tile_m = 256 if a_chunks.shape[0] >= 128 and chunk_size >= 256 else 128
+    tile_m = (
+        64
+        if a_chunks.shape[-1] <= 64
+        else 256
+        if a_chunks.shape[0] >= 128 and chunk_size >= 256
+        else 128
+    )
     _gemm_sm90_nonpersistent(
         dout_chunks.transpose(-1, -2),
         a_chunks.transpose(-1, -2),

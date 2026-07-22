@@ -209,7 +209,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/ssd_bmm.py:_bmm_chunk_fwd_cute",
     },
     "triton.ssd_bmm._bmm_chunk_bwd": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/ssd_bmm.py:_bmm_chunk_bwd_cute",
     },
     "triton.layer_norm.rms_norm_fn": {

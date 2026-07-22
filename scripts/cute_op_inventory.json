@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 65,
-    "promoted": 4
+    "present_unverified": 64,
+    "promoted": 5
   },
   "routes": [
     {
@@ -106,7 +106,7 @@
       "id": "triton.ssd_bmm._bmm_chunk_bwd",
       "implementation": "mamba_ssm/ops/cute/ssd_bmm.py:_bmm_chunk_bwd_cute",
       "source": "mamba_ssm/ops/triton/ssd_bmm.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "_bmm_chunk_bwd"
     },
     {
