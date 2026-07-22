@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 47,
-    "promoted": 22
+    "present_unverified": 46,
+    "promoted": 23
   },
   "routes": [
     {
@@ -362,7 +362,7 @@
       "id": "triton.mamba3.utils.sigmoid_approx",
       "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:sigmoid_approx",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "sigmoid_approx"
     },
     {

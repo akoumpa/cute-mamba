@@ -434,7 +434,9 @@ CUTE_ROUTES = {
     },
     **{
         f"triton.mamba3.utils.{symbol}": {
-            "status": "present_unverified",
+            "status": "promoted"
+            if symbol == "sigmoid_approx"
+            else "present_unverified",
             "implementation": f"mamba_ssm/ops/cute/mamba3/utils.py:{symbol}",
         }
         for symbol in (
