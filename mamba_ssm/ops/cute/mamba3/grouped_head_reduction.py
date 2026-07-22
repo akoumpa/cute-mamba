@@ -6,8 +6,10 @@ import cuda.bindings.driver as cuda
 import cutlass
 import cutlass.cute as cute
 import torch
-from cutlass import Float32, Int32, Int64
+from cutlass import Float32, Int32, Int64, const_expr
 from quack.cute_dsl_utils import torch2cute_dtype_map
+
+from mamba_ssm.ops.cute.mamba3.packing import i32_to_bf16x2
 
 
 _NUM_THREADS = 256
@@ -259,7 +261,7 @@ def _reduce_grouped_qk_grads_pair_cute(
 
 
 @cache
-def _compile_qk_bias_reduction(input_dtype, vec_size: int):
+def _compile_qk_bias_reduction(input_dtype, vec_size: int, *, packed_bf16: bool):
     class QKBiasReduction:
         @cute.jit
         def __call__(
@@ -317,12 +319,24 @@ def _compile_qk_bias_reduction(input_dtype, vec_size: int):
 
             dq_sum = [Float32(0.0) for _ in range(vec_size)]
             dk_sum = [Float32(0.0) for _ in range(vec_size)]
+            if const_expr(packed_bf16):
+                mDQPacked = cute.recast_tensor(mDQ, Int32)
+                mDKPacked = cute.recast_tensor(mDK, Int32)
             for row in cutlass.range(tidx, total_rows, _NUM_THREADS, unroll=1):
                 base = ((Int64(row) * rank + rank_idx) * nheads + head) * dim + feature
-                for item in cutlass.range_constexpr(vec_size):
-                    if feature + item < dim:
-                        dq_sum[item] += Float32(mDQ[base + item])
-                        dk_sum[item] += Float32(mDK[base + item])
+                if const_expr(packed_bf16):
+                    for pair in cutlass.range_constexpr(vec_size // 2):
+                        dq0, dq1 = i32_to_bf16x2(mDQPacked[base // 2 + pair])
+                        dk0, dk1 = i32_to_bf16x2(mDKPacked[base // 2 + pair])
+                        dq_sum[pair * 2] += Float32(dq0)
+                        dq_sum[pair * 2 + 1] += Float32(dq1)
+                        dk_sum[pair * 2] += Float32(dk0)
+                        dk_sum[pair * 2 + 1] += Float32(dk1)
+                else:
+                    for item in cutlass.range_constexpr(vec_size):
+                        if feature + item < dim:
+                            dq_sum[item] += Float32(mDQ[base + item])
+                            dk_sum[item] += Float32(mDK[base + item])
 
             smem = cutlass.utils.SmemAllocator()
             partial = smem.allocate_tensor(
@@ -411,7 +425,11 @@ def reduce_grouped_qk_grads_and_bias_cute(
     dq_bias = torch.empty(nheads, rank, dim, device=dq_raw.device, dtype=torch.float32)
     dk_bias = torch.empty_like(dq_bias)
     vec_size = 4 if dim % 4 == 0 else 1
-    compiled = _compile_qk_bias_reduction(torch2cute_dtype_map[dq_raw.dtype], vec_size)
+    compiled = _compile_qk_bias_reduction(
+        torch2cute_dtype_map[dq_raw.dtype],
+        vec_size,
+        packed_bf16=dq_raw.dtype == torch.bfloat16 and dim % 4 == 0,
+    )
     compiled(
         dq_raw.view(-1),
         dk_raw.view(-1),

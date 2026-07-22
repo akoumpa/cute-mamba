@@ -34,14 +34,14 @@ def test_reduce_grouped_qk_grads_and_bias_cute(dtype, num_heads, num_groups):
         reduce_grouped_qk_grads_and_bias_cute,
     )
     from mamba_ssm.ops.triton.mamba3.grouped_head_reduction import (
-        reduce_grouped_qk_grads_and_bias_triton,
+        _reduce_grouped_qk_grads_and_bias_triton,
     )
 
     torch.manual_seed(1)
     dq = torch.randn(2, 129, 2, num_heads, 32, device="cuda", dtype=dtype)
     dk = torch.randn_like(dq)
     actual = reduce_grouped_qk_grads_and_bias_cute(dq, dk, num_groups)
-    expected = reduce_grouped_qk_grads_and_bias_triton(dq, dk, num_groups)
+    expected = _reduce_grouped_qk_grads_and_bias_triton(dq, dk, num_groups)
     for actual_tensor, expected_tensor in zip(actual, expected):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=2e-3, atol=4e-3)
 
@@ -59,3 +59,39 @@ def test_reduce_grouped_qk_grads_dispatches_proven_fp32_shape(monkeypatch):
 
     grads = torch.empty(8, 1024, 1, 32, 64, device="cuda", dtype=torch.float32)
     assert triton_reduction.reduce_grouped_qk_grads(grads, 8) is sentinel
+
+
+def test_grouped_qk_grads_and_bias_dispatches_bf16_identity_groups(monkeypatch):
+    _require_cute()
+    import mamba_ssm.ops.cute.mamba3.grouped_head_reduction as cute_reduction
+    import mamba_ssm.ops.triton.mamba3.grouped_head_reduction as triton_reduction
+
+    sentinel = (object(), object(), object(), object())
+    monkeypatch.setattr(triton_reduction, "is_cute_dsl_available", lambda: True)
+    monkeypatch.setattr(
+        cute_reduction,
+        "reduce_grouped_qk_grads_and_bias_cute",
+        lambda *args: sentinel,
+    )
+    grads = torch.empty(1, 32, 1, 8, 64, device="cuda", dtype=torch.bfloat16)
+    assert (
+        triton_reduction.reduce_grouped_qk_grads_and_bias_triton(grads, grads, 8)
+        is sentinel
+    )
+
+
+def test_grouped_qk_grads_and_bias_nonidentity_uses_triton(monkeypatch):
+    _require_cute()
+    import mamba_ssm.ops.triton.mamba3.grouped_head_reduction as triton_reduction
+
+    sentinel = (object(), object(), object(), object())
+    monkeypatch.setattr(
+        triton_reduction,
+        "_reduce_grouped_qk_grads_and_bias_triton",
+        lambda *args: sentinel,
+    )
+    grads = torch.empty(1, 32, 1, 16, 64, device="cuda", dtype=torch.bfloat16)
+    assert (
+        triton_reduction.reduce_grouped_qk_grads_and_bias_triton(grads, grads, 4)
+        is sentinel
+    )

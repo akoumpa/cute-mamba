@@ -150,7 +150,7 @@ def _next_power_of_2(value: int) -> int:
     return 1 << (value - 1).bit_length()
 
 
-def reduce_grouped_qk_grads_and_bias_triton(
+def _reduce_grouped_qk_grads_and_bias_triton(
     dq_raw: torch.Tensor,
     dk_raw: torch.Tensor,
     num_qk_groups: int,
@@ -243,3 +243,35 @@ def reduce_grouped_qk_grads_and_bias_triton(
     )
 
     return dq_out, dk_out, dq_bias, dk_bias
+
+
+def reduce_grouped_qk_grads_and_bias_triton(
+    dq_raw: torch.Tensor,
+    dk_raw: torch.Tensor,
+    num_qk_groups: int,
+    block_m: int = 64,
+    block_n: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    if (
+        is_cute_dsl_available()
+        and dq_raw.ndim == 5
+        and dk_raw.shape == dq_raw.shape
+        and dq_raw.dtype == dk_raw.dtype == torch.bfloat16
+        and dq_raw.is_cuda
+        and dk_raw.is_cuda
+        and dq_raw.is_contiguous()
+        and dk_raw.is_contiguous()
+        and num_qk_groups == dq_raw.shape[3]
+        and dq_raw.shape[-1] % 4 == 0
+        and torch.cuda.get_device_capability(dq_raw.device)[0] >= 9
+    ):
+        from mamba_ssm.ops.cute.mamba3.grouped_head_reduction import (
+            reduce_grouped_qk_grads_and_bias_cute,
+        )
+
+        return reduce_grouped_qk_grads_and_bias_cute(
+            dq_raw, dk_raw, num_qk_groups, block_m, block_n
+        )
+    return _reduce_grouped_qk_grads_and_bias_triton(
+        dq_raw, dk_raw, num_qk_groups, block_m, block_n
+    )

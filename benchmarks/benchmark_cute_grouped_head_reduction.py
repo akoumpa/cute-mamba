@@ -6,8 +6,8 @@ from mamba_ssm.ops.cute.mamba3.grouped_head_reduction import (
     reduce_grouped_qk_grads_cute,
 )
 from mamba_ssm.ops.triton.mamba3.grouped_head_reduction import (
+    _reduce_grouped_qk_grads_and_bias_triton,
     reduce_grouped_qk_grads,
-    reduce_grouped_qk_grads_and_bias_triton,
 )
 
 
@@ -46,6 +46,10 @@ if __name__ == "__main__":
     for dtype, batch, seqlen, rank, heads, groups, dim in (
         (torch.bfloat16, 2, 2048, 2, 16, 4, 64),
         (torch.float16, 1, 8192, 1, 64, 4, 32),
+        (torch.bfloat16, 1, 1024, 1, 8, 8, 64),
+        (torch.bfloat16, 2, 2048, 2, 16, 16, 64),
+        (torch.bfloat16, 2, 4096, 2, 16, 16, 64),
+        (torch.float16, 1, 8192, 1, 64, 64, 32),
     ):
         dq = torch.randn(batch, seqlen, rank, heads, dim, device="cuda", dtype=dtype)
         dk = torch.randn_like(dq)
@@ -54,7 +58,7 @@ if __name__ == "__main__":
             return reduce_grouped_qk_grads_and_bias_cute(dq, dk, groups)
 
         def triton_fn():
-            return reduce_grouped_qk_grads_and_bias_triton(dq, dk, groups)
+            return _reduce_grouped_qk_grads_and_bias_triton(dq, dk, groups)
 
         cute_fn()
         triton_fn()

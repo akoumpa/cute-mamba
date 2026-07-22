@@ -6,51 +6,16 @@ import cuda.bindings.driver as cuda
 import cutlass
 import cutlass.cute as cute
 import torch
-from cutlass import BFloat16, Float32, Int32, Int64, const_expr
-from cutlass._mlir.dialects import vector
-from cutlass.cutlass_dsl import T, dsl_user_op
+from cutlass import Float32, Int32, Int64, const_expr
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
+from mamba_ssm.ops.cute.mamba3.packing import bf16x2_to_i32, i32_to_bf16x2
 from mamba_ssm.ops.cute.mamba3.utils import sigmoid_approx
 
 
 _NUM_THREADS = 256
 _VEC_SIZE = 1
 _PACKED_BF16_MIN_ELEMENTS = 1 << 22
-
-
-@dsl_user_op
-def _i32_to_bf16x2(value: Int32, *, loc=None, ip=None):
-    packed = vector.from_elements(
-        T.vector(1, T.i32()), (value.ir_value(),), loc=loc, ip=ip
-    )
-    unpacked = vector.bitcast(T.vector(2, T.bf16()), packed, loc=loc, ip=ip)
-    return tuple(
-        BFloat16(
-            vector.extract(
-                unpacked,
-                dynamic_position=[],
-                static_position=[index],
-                loc=loc,
-                ip=ip,
-            )
-        )
-        for index in range(2)
-    )
-
-
-@dsl_user_op
-def _bf16x2_to_i32(first: BFloat16, second: BFloat16, *, loc=None, ip=None):
-    unpacked = vector.from_elements(
-        T.vector(2, T.bf16()),
-        (first.ir_value(), second.ir_value()),
-        loc=loc,
-        ip=ip,
-    )
-    packed = vector.bitcast(T.vector(1, T.i32()), unpacked, loc=loc, ip=ip)
-    return Int32(
-        vector.extract(packed, dynamic_position=[], static_position=[0], loc=loc, ip=ip)
-    )
 
 
 @cache
@@ -95,9 +60,9 @@ def _compile_compute_dzdo(do_dtype, z_dtype, o_dtype, *, packed_bf16: bool):
                     o_packed = cute.recast_tensor(mO, Int32)
                     dz_packed = cute.recast_tensor(mDz, Int32)
                     do_scaled_packed = cute.recast_tensor(mDoScaled, Int32)
-                    grad0, grad1 = _i32_to_bf16x2(do_packed[packed_index])
-                    z0, z1 = _i32_to_bf16x2(z_packed[packed_index])
-                    output0, output1 = _i32_to_bf16x2(o_packed[packed_index])
+                    grad0, grad1 = i32_to_bf16x2(do_packed[packed_index])
+                    z0, z1 = i32_to_bf16x2(z_packed[packed_index])
+                    output0, output1 = i32_to_bf16x2(o_packed[packed_index])
                     sigmoid0 = sigmoid_approx(Float32(z0))
                     sigmoid1 = sigmoid_approx(Float32(z1))
                     silu0 = Float32(z0) * sigmoid0
@@ -114,8 +79,8 @@ def _compile_compute_dzdo(do_dtype, z_dtype, o_dtype, *, packed_bf16: bool):
                     )
                     do_scaled0 = do_dtype(Float32(grad0) * silu0)
                     do_scaled1 = do_dtype(Float32(grad1) * silu1)
-                    dz_packed[packed_index] = _bf16x2_to_i32(dz0, dz1)
-                    do_scaled_packed[packed_index] = _bf16x2_to_i32(
+                    dz_packed[packed_index] = bf16x2_to_i32(dz0, dz1)
+                    do_scaled_packed[packed_index] = bf16x2_to_i32(
                         do_scaled0, do_scaled1
                     )
             else:
