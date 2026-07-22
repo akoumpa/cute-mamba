@@ -332,6 +332,30 @@ CUTE_ROUTES = {
         "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_rotary_step.py:apply_rotary_qk_inference_fwd_cute",
     },
+    "triton.mamba3.mamba3_mimo_utils.bwd_dadt_fused_triton": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dadt_fused_cute",
+    },
+    "triton.mamba3.mamba3_mimo_utils.bwd_dtrap_ddt_triton": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dtrap_ddt_cute",
+    },
+    "triton.mamba3.mamba3_mimo_utils.compute_dacs_segsum_triton": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:compute_dacs_segsum_cute",
+    },
+    "triton.mamba3.mamba3_mimo_utils.bwd_dadt_fused_triton_varlen": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dadt_fused_cute_varlen",
+    },
+    "triton.mamba3.mamba3_mimo_utils.bwd_dtrap_ddt_triton_varlen": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dtrap_ddt_cute_varlen",
+    },
+    "triton.mamba3.mamba3_mimo_utils.compute_dacs_segsum_triton_varlen": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:compute_dacs_segsum_cute_varlen",
+    },
     **{
         f"triton.mamba3.utils.{symbol}": {
             "status": "present_unverified",

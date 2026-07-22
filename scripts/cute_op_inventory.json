@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 25,
-    "present_unverified": 41,
+    "missing": 19,
+    "present_unverified": 47,
     "promoted": 3
   },
   "routes": [
@@ -400,49 +400,49 @@
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_mimo_utils.bwd_dadt_fused_triton",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dadt_fused_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "bwd_dadt_fused_triton"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_mimo_utils.bwd_dtrap_ddt_triton",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dtrap_ddt_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "bwd_dtrap_ddt_triton"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_mimo_utils.compute_dacs_segsum_triton_varlen",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:compute_dacs_segsum_cute_varlen",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "compute_dacs_segsum_triton_varlen"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_mimo_utils.compute_dacs_segsum_triton",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:compute_dacs_segsum_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "compute_dacs_segsum_triton"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_mimo_utils.bwd_dadt_fused_triton_varlen",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dadt_fused_cute_varlen",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "bwd_dadt_fused_triton_varlen"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_mimo_utils.bwd_dtrap_ddt_triton_varlen",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dtrap_ddt_cute_varlen",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "bwd_dtrap_ddt_triton_varlen"
     },
     {
