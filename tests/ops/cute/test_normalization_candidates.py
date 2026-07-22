@@ -88,3 +88,47 @@ def test_quack_rmsnorm_promoted_route(dtype, api):
     expected_grads = torch.autograd.grad(expected, inputs, grad)
     for actual_grad, expected_grad in zip(actual_grads, expected_grads):
         torch.testing.assert_close(actual_grad, expected_grad, rtol=5e-2, atol=5e-2)
+
+
+def test_quack_layernorm_promoted_inference_route():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required")
+    from mamba_ssm.ops.cute.normalization import layernorm_fn_cute
+    from mamba_ssm.ops.triton.layernorm_gated import layernorm_fn
+
+    torch.manual_seed(22)
+    x = torch.randn(128, 256, device="cuda", dtype=torch.bfloat16)
+    weight = torch.randn(256, device="cuda")
+    bias = torch.randn(256, device="cuda")
+    with torch.no_grad():
+        actual = layernorm_fn_cute(x, weight, bias)
+        expected = layernorm_fn(x, weight, bias)
+    torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
+
+
+def test_gated_rmsnorm_uses_exact_fallback(monkeypatch):
+    from mamba_ssm.ops.cute.normalization import rmsnorm_fn_cute
+
+    sentinel = object()
+    monkeypatch.setattr(
+        "mamba_ssm.ops.triton.layernorm_gated.rmsnorm_fn",
+        lambda *args, **kwargs: sentinel,
+    )
+    x = torch.randn(2, 64)
+    weight = torch.randn(64)
+    bias = torch.randn(64)
+    assert rmsnorm_fn_cute(x, weight, bias) is sentinel
+
+
+def test_gated_layernorm_uses_exact_fallback(monkeypatch):
+    from mamba_ssm.ops.cute.normalization import layernorm_fn_cute
+
+    sentinel = object()
+    monkeypatch.setattr(
+        "mamba_ssm.ops.triton.layernorm_gated.layernorm_fn",
+        lambda *args, **kwargs: sentinel,
+    )
+    x = torch.randn(2, 64)
+    weight = torch.randn(64)
+    bias = torch.randn(64)
+    assert layernorm_fn_cute(x, weight, bias) is sentinel

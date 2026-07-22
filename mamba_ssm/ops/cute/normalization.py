@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import torch
-import torch.nn.functional as F
 
 
 def _can_use_quack_rmsnorm(x, weight, bias, *, gated_api):
@@ -20,7 +19,26 @@ def _can_use_quack_rmsnorm(x, weight, bias, *, gated_api):
     if gated_api:
         return x.dtype == torch.bfloat16 and x.shape[-1] == 256 and rows >= 512
     return x.dtype == torch.bfloat16 and (
-        (x.shape[-1] == 256 and rows >= 128) or (x.shape[-1] == 2048 and rows >= 512)
+        (x.shape[-1] == 256 and rows >= 128)
+        or (x.shape[-1] == 2048 and 512 <= rows <= 1024)
+    )
+
+
+def _can_use_quack_layernorm(x, weight, bias):
+    rows = x.numel() // x.shape[-1]
+    return (
+        x.is_cuda
+        and x.dtype == torch.bfloat16
+        and x.shape[-1] == 256
+        and rows >= 128
+        and weight.shape == (256,)
+        and (bias is None or bias.shape == weight.shape)
+        and x.stride(-1) == 1
+        and weight.stride(-1) == 1
+        and (bias is None or bias.stride(-1) == 1)
+        and not any(
+            tensor is not None and tensor.requires_grad for tensor in (x, weight, bias)
+        )
     )
 
 
@@ -110,28 +128,6 @@ def layer_norm_linear_fn_cute(
     )
 
 
-def _gated_norm(x, weight, bias, z, eps, group_size, norm_before_gate, *, is_rms_norm):
-    hidden_size = x.shape[-1]
-    group_size = hidden_size if group_size is None else group_size
-    if hidden_size % group_size:
-        raise AssertionError("hidden size must be divisible by group size")
-    gated_x = x * F.silu(z) if z is not None and not norm_before_gate else x
-    groups = gated_x.reshape(*gated_x.shape[:-1], hidden_size // group_size, group_size)
-    if is_rms_norm:
-        inverse_rms = torch.rsqrt(
-            groups.float().square().mean(dim=-1, keepdim=True) + eps
-        )
-        normalized = groups.float() * inverse_rms
-    else:
-        normalized = F.layer_norm(groups.float(), (group_size,), eps=eps)
-    output = normalized.reshape_as(gated_x).to(x.dtype) * weight
-    if bias is not None:
-        output = output + bias
-    if z is not None and norm_before_gate:
-        output = output * F.silu(z)
-    return output.to(x.dtype)
-
-
 def layernorm_fn_cute(
     x,
     weight,
@@ -142,15 +138,22 @@ def layernorm_fn_cute(
     norm_before_gate=True,
     is_rms_norm=False,
 ):
-    return _gated_norm(
-        x,
-        weight,
-        bias,
-        z,
-        eps,
-        group_size,
-        norm_before_gate,
-        is_rms_norm=is_rms_norm,
+    if (
+        not is_rms_norm
+        and z is None
+        and group_size is None
+        and _can_use_quack_layernorm(x, weight, bias)
+    ):
+        from quack.rmsnorm import layernorm_fwd
+
+        original_shape = x.shape
+        return layernorm_fwd(
+            x.reshape(-1, original_shape[-1]), weight, bias, eps
+        ).reshape(original_shape)
+    from mamba_ssm.ops.triton.layernorm_gated import layernorm_fn
+
+    return layernorm_fn(
+        x, weight, bias, z, eps, group_size, norm_before_gate, is_rms_norm
     )
 
 
@@ -168,19 +171,12 @@ def rmsnorm_fn_cute(
             from quack.rmsnorm import rmsnorm
 
             return rmsnorm(x, weight, bias, eps=eps)
-        from mamba_ssm.ops.triton.layer_norm import rms_norm_fn
+        from mamba_ssm.ops.triton.layernorm_gated import rmsnorm_fn
 
-        return rms_norm_fn(x, weight, bias, eps=eps)
-    return _gated_norm(
-        x,
-        weight,
-        bias,
-        z,
-        eps,
-        group_size,
-        norm_before_gate,
-        is_rms_norm=True,
-    )
+        return rmsnorm_fn(x, weight, bias, eps=eps)
+    from mamba_ssm.ops.triton.layernorm_gated import rmsnorm_fn
+
+    return rmsnorm_fn(x, weight, bias, z, eps, group_size, norm_before_gate)
 
 
 __all__ = [

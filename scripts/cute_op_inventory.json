@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 52,
-    "promoted": 17
+    "present_unverified": 51,
+    "promoted": 18
   },
   "routes": [
     {
@@ -74,7 +74,7 @@
       "id": "triton.layernorm_gated.layernorm_fn",
       "implementation": "mamba_ssm/ops/cute/normalization.py:layernorm_fn_cute",
       "source": "mamba_ssm/ops/triton/layernorm_gated.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "layernorm_fn"
     },
     {

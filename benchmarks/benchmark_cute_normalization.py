@@ -1,9 +1,13 @@
 import torch
 from triton.testing import do_bench
 
-from mamba_ssm.ops.cute.normalization import layer_norm_fn_cute, rmsnorm_fn_cute
+from mamba_ssm.ops.cute.normalization import (
+    layer_norm_fn_cute,
+    layernorm_fn_cute,
+    rmsnorm_fn_cute,
+)
 from mamba_ssm.ops.triton.layer_norm import layer_norm_fn
-from mamba_ssm.ops.triton.layernorm_gated import rmsnorm_fn
+from mamba_ssm.ops.triton.layernorm_gated import layernorm_fn, rmsnorm_fn
 
 
 CASES = [
@@ -65,6 +69,34 @@ def benchmark_case(dtype, rows, width):
             )
 
 
+def benchmark_layernorm_case(dtype, rows, width):
+    torch.manual_seed(1)
+    x = torch.randn(rows, width, device="cuda", dtype=dtype)
+    weight = torch.randn(width, device="cuda")
+    bias = torch.randn(width, device="cuda")
+    implementations = (
+        ("cute", lambda: layernorm_fn_cute(x, weight, bias, eps=1e-6)),
+        ("gated", lambda: layernorm_fn(x, weight, bias, eps=1e-6)),
+        (
+            "generic",
+            lambda: layer_norm_fn(x, weight, bias, eps=1e-6, is_rms_norm=False),
+        ),
+    )
+    times = {}
+    for name, function in implementations:
+        function()
+        times[name] = do_bench(function, warmup=25, rep=100)
+    for reference in ("gated", "generic"):
+        print(
+            f"op=layernorm_fwd reference={reference} dtype={dtype} rows={rows} "
+            f"width={width} speedup={times[reference] / times['cute']:.3f} "
+            f"cute_ms={times['cute']:.4f} triton_ms={times[reference]:.4f}",
+            flush=True,
+        )
+
+
 if __name__ == "__main__":
     for case in CASES:
         benchmark_case(*case)
+    for case in CASES:
+        benchmark_layernorm_case(*case)

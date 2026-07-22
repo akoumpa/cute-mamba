@@ -225,7 +225,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/normalization.py:layer_norm_linear_fn_cute",
     },
     "triton.layernorm_gated.layernorm_fn": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/normalization.py:layernorm_fn_cute",
     },
     "triton.layernorm_gated.rmsnorm_fn": {
