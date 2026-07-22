@@ -4,6 +4,26 @@ import torch
 import torch.nn.functional as F
 
 
+def _can_use_quack_rmsnorm(x, weight, bias, *, gated_api):
+    if (
+        not x.is_cuda
+        or x.dtype not in (torch.float16, torch.bfloat16)
+        or x.shape[-1] not in (256, 2048, 4096)
+        or weight.shape != (x.shape[-1],)
+        or (bias is not None and bias.shape != weight.shape)
+        or x.stride(-1) != 1
+        or weight.stride(-1) != 1
+        or (bias is not None and bias.stride(-1) != 1)
+    ):
+        return False
+    rows = x.numel() // x.shape[-1]
+    if gated_api:
+        return x.dtype == torch.bfloat16 and x.shape[-1] == 256 and rows >= 512
+    return x.dtype == torch.bfloat16 and (
+        (x.shape[-1] == 256 and rows >= 128) or (x.shape[-1] == 2048 and rows >= 512)
+    )
+
+
 def layer_norm_fn_cute(
     x,
     weight,
@@ -20,6 +40,28 @@ def layer_norm_fn_cute(
     is_rms_norm=False,
     return_dropout_mask=False,
 ):
+    if (
+        is_rms_norm
+        and residual is None
+        and x1 is None
+        and weight1 is None
+        and bias1 is None
+        and dropout_p == 0.0
+        and rowscale is None
+        and not return_dropout_mask
+        and _can_use_quack_rmsnorm(x, weight, bias, gated_api=False)
+    ):
+        from quack.rmsnorm import rmsnorm
+
+        return rmsnorm(
+            x,
+            weight,
+            bias,
+            eps=eps,
+            residual_dtype=torch.float32 if residual_in_fp32 else None,
+            prenorm=prenorm,
+        )
+
     from mamba_ssm.ops.triton.layer_norm import layer_norm_fn
 
     return layer_norm_fn(
@@ -122,6 +164,10 @@ def rmsnorm_fn_cute(
     norm_before_gate=True,
 ):
     if z is None and group_size is None:
+        if _can_use_quack_rmsnorm(x, weight, bias, gated_api=True):
+            from quack.rmsnorm import rmsnorm
+
+            return rmsnorm(x, weight, bias, eps=eps)
         from mamba_ssm.ops.triton.layer_norm import rms_norm_fn
 
         return rms_norm_fn(x, weight, bias, eps=eps)
