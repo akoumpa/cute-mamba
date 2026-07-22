@@ -10,7 +10,7 @@ def _require_cute():
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
-@pytest.mark.parametrize("shape", [(7, 128), (2, 3, 2048), (1, 8192)])
+@pytest.mark.parametrize("shape", [(7, 128), (3, 130), (2, 3, 2048), (1, 8192)])
 def test_swiglu_forward_backward(dtype, shape):
     _require_cute()
     from mamba_ssm.ops.cute.activations import _swiglu_bwd, _swiglu_fwd

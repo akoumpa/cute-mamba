@@ -13,13 +13,14 @@ from quack.activation import dswiglu, swiglu
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
 
-_BLOCK_SIZE = 1024
-_NUM_THREADS = 256
-_ELEMENTS_PER_THREAD = _BLOCK_SIZE // _NUM_THREADS
+_BLOCK_SIZE = 2048
+_VALUES_PER_ITEM = 2
 
 
 @cache
-def _compile_swiglu_fwd(input_dtype):
+def _compile_swiglu_fwd(input_dtype, num_threads: int):
+    items_per_thread = _BLOCK_SIZE // (num_threads * _VALUES_PER_ITEM)
+
     class SwiGLUForward:
         @cute.jit
         def __call__(
@@ -32,7 +33,7 @@ def _compile_swiglu_fwd(input_dtype):
         ):
             self.kernel(mXY, mOut, nrows, ncols).launch(
                 grid=[nrows, cute.ceil_div(ncols, _BLOCK_SIZE), 1],
-                block=[_NUM_THREADS, 1, 1],
+                block=[num_threads, 1, 1],
                 stream=stream,
             )
 
@@ -50,13 +51,19 @@ def _compile_swiglu_fwd(input_dtype):
             row_base = Int64(row) * (Int64(2) * ncols)
             out_base = Int64(row) * ncols
 
-            for item in cutlass.range_constexpr(_ELEMENTS_PER_THREAD):
-                col = block_base + tidx + item * _NUM_THREADS
+            for item in cutlass.range_constexpr(items_per_thread):
+                col = block_base + (tidx + item * num_threads) * _VALUES_PER_ITEM
                 if col < ncols:
                     xy_offset = row_base + col
                     x = Float32(mXY[xy_offset])
                     y = Float32(mXY[xy_offset + ncols])
-                    mOut[out_base + col] = input_dtype(swiglu(x, y))
+                    if col + 1 < ncols:
+                        x_next = Float32(mXY[xy_offset + 1])
+                        y_next = Float32(mXY[xy_offset + ncols + 1])
+                        mOut[out_base + col] = input_dtype(swiglu(x, y))
+                        mOut[out_base + col + 1] = input_dtype(swiglu(x_next, y_next))
+                    else:
+                        mOut[out_base + col] = input_dtype(swiglu(x, y))
 
     xy_fake = cute.runtime.make_fake_tensor(
         input_dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
@@ -76,7 +83,11 @@ def _compile_swiglu_fwd(input_dtype):
 
 
 @cache
-def _compile_swiglu_bwd(input_dtype, grad_dtype, recompute_output: bool):
+def _compile_swiglu_bwd(
+    input_dtype, grad_dtype, recompute_output: bool, num_threads: int
+):
+    items_per_thread = _BLOCK_SIZE // (num_threads * _VALUES_PER_ITEM)
+
     class SwiGLUBackward:
         @cute.jit
         def __call__(
@@ -91,7 +102,7 @@ def _compile_swiglu_bwd(input_dtype, grad_dtype, recompute_output: bool):
         ):
             self.kernel(mXY, mDOut, mDXY, mOut, nrows, ncols).launch(
                 grid=[nrows, cute.ceil_div(ncols, _BLOCK_SIZE), 1],
-                block=[_NUM_THREADS, 1, 1],
+                block=[num_threads, 1, 1],
                 stream=stream,
             )
 
@@ -111,19 +122,33 @@ def _compile_swiglu_bwd(input_dtype, grad_dtype, recompute_output: bool):
             row_base = Int64(row) * (Int64(2) * ncols)
             out_base = Int64(row) * ncols
 
-            for item in cutlass.range_constexpr(_ELEMENTS_PER_THREAD):
-                col = block_base + tidx + item * _NUM_THREADS
+            for item in cutlass.range_constexpr(items_per_thread):
+                col = block_base + (tidx + item * num_threads) * _VALUES_PER_ITEM
                 if col < ncols:
                     xy_offset = row_base + col
                     out_offset = out_base + col
                     x = Float32(mXY[xy_offset])
                     y = Float32(mXY[xy_offset + ncols])
                     dout = Float32(mDOut[out_offset])
-                    dx, dy, out = dswiglu(x, y, dout)
-                    mDXY[xy_offset] = input_dtype(dx)
-                    mDXY[xy_offset + ncols] = input_dtype(dy)
-                    if cutlass.const_expr(recompute_output):
-                        mOut[out_offset] = input_dtype(out)
+                    if col + 1 < ncols:
+                        x_next = Float32(mXY[xy_offset + 1])
+                        y_next = Float32(mXY[xy_offset + ncols + 1])
+                        dout_next = Float32(mDOut[out_offset + 1])
+                        dx, dy, out = dswiglu(x, y, dout)
+                        dx_next, dy_next, out_next = dswiglu(x_next, y_next, dout_next)
+                        mDXY[xy_offset] = input_dtype(dx)
+                        mDXY[xy_offset + 1] = input_dtype(dx_next)
+                        mDXY[xy_offset + ncols] = input_dtype(dy)
+                        mDXY[xy_offset + ncols + 1] = input_dtype(dy_next)
+                        if cutlass.const_expr(recompute_output):
+                            mOut[out_offset] = input_dtype(out)
+                            mOut[out_offset + 1] = input_dtype(out_next)
+                    else:
+                        dx, dy, out = dswiglu(x, y, dout)
+                        mDXY[xy_offset] = input_dtype(dx)
+                        mDXY[xy_offset + ncols] = input_dtype(dy)
+                        if cutlass.const_expr(recompute_output):
+                            mOut[out_offset] = input_dtype(out)
 
     xy_fake = cute.runtime.make_fake_tensor(
         input_dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
@@ -170,7 +195,8 @@ def _swiglu_fwd(xy: torch.Tensor, out: torch.Tensor | None = None) -> torch.Tens
         raise ValueError(
             "SwiGLU output must have the input batch shape and a contiguous last dimension"
         )
-    compiled = _compile_swiglu_fwd(torch2cute_dtype_map[xy.dtype])
+    num_threads = 512 if 512 <= ncols <= 1024 else 256
+    compiled = _compile_swiglu_fwd(torch2cute_dtype_map[xy.dtype], num_threads)
     compiled(xy.view(-1), out_2d.view(-1), nrows, ncols)
     return out_2d.reshape(*batch_shape, ncols)
 
@@ -214,6 +240,7 @@ def _swiglu_bwd(
         torch2cute_dtype_map[xy.dtype],
         torch2cute_dtype_map[dout.dtype],
         recompute_output,
+        512 if 512 <= ncols <= 1024 else 256,
     )
     compiled(
         xy.view(-1),
