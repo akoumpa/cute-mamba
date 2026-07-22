@@ -125,7 +125,8 @@ def test_bwd_dtrap_ddt_cute(dtype):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)
 
 
-def test_mamba3_mimo_utils_varlen_cute():
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_mamba3_mimo_utils_varlen_cute(dtype):
     _require_cuda()
     from mamba_ssm.ops.cute.mamba3.mamba3_mimo_utils import (
         bwd_dadt_fused_cute_varlen,
@@ -141,16 +142,19 @@ def test_mamba3_mimo_utils_varlen_cute():
     torch.manual_seed(3)
     batch, nheads, seqlen, chunk_size = 1, 2, 75, 16
     cu = torch.tensor([0, 23, 23, 75], device="cuda", dtype=torch.int32)
-    da = -torch.rand(batch, nheads, seqlen, device="cuda")
+    da = -torch.rand(batch, nheads, seqlen, device="cuda", dtype=dtype)
     actual = compute_dacs_segsum_cute_varlen(da, chunk_size, cu)
     expected = compute_dacs_segsum_triton_varlen(da, chunk_size, cu)
+    rtol, atol = (1e-2, 1.3e-1) if dtype == torch.bfloat16 else (2e-3, 3e-3)
     for actual_tensor, expected_tensor in zip(actual, expected):
-        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=2e-3, atol=3e-3)
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)
 
+    da = da.float()
+    expected = tuple(tensor.float() for tensor in expected)
     _, _, segsum = expected
     dSSdA = torch.randn_like(segsum)
     SSdA = torch.randn_like(segsum) * 0.1
-    ddA_cs = torch.randn_like(da)
+    ddA_cs = torch.randn_like(da, dtype=torch.float32)
     ddA_cs_rev = torch.randn_like(da)
     actual_dadt = bwd_dadt_fused_cute_varlen(
         dSSdA, SSdA, ddA_cs, ddA_cs_rev, expected[0], expected[1], chunk_size, cu

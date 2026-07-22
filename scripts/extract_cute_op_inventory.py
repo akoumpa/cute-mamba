@@ -429,7 +429,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dtrap_ddt_cute_varlen",
     },
     "triton.mamba3.mamba3_mimo_utils.compute_dacs_segsum_triton_varlen": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:compute_dacs_segsum_cute_varlen",
     },
     **{

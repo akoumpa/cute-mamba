@@ -7,12 +7,14 @@ from mamba_ssm.ops.cute.mamba3.mamba3_mimo_utils import (
     bwd_dtrap_ddt_cute,
     bwd_dtrap_ddt_cute_varlen,
     compute_dacs_segsum_cute,
+    compute_dacs_segsum_cute_varlen,
 )
 from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import (
     bwd_dadt_fused_triton,
     bwd_dtrap_ddt_triton,
     bwd_dtrap_ddt_triton_varlen,
     compute_dacs_segsum_triton,
+    compute_dacs_segsum_triton_varlen,
 )
 
 
@@ -118,8 +120,31 @@ def benchmark_dadt():
             )
 
 
+def benchmark_dacs_segsum_varlen():
+    for dtype in (torch.float32, torch.bfloat16):
+        for num_sequences in (2, 8, 32):
+            lengths = torch.full(
+                (num_sequences,), 128, device="cuda", dtype=torch.int32
+            )
+            cu_seqlens = torch.cat(
+                (torch.zeros(1, device="cuda", dtype=torch.int32), lengths.cumsum(0))
+            )
+            seqlen = int(cu_seqlens[-1])
+            da = -torch.rand(1, 16, seqlen, device="cuda", dtype=dtype)
+            cute_ms = bench(lambda: compute_dacs_segsum_cute_varlen(da, 64, cu_seqlens))
+            triton_ms = bench(
+                lambda: compute_dacs_segsum_triton_varlen(da, 64, cu_seqlens)
+            )
+            print(
+                f"dacs_segsum_varlen dtype={dtype} sequences={num_sequences}: "
+                f"cute={cute_ms:.4f} ms triton={triton_ms:.4f} ms "
+                f"speedup={triton_ms / cute_ms:.3f}x"
+            )
+
+
 if __name__ == "__main__":
     benchmark_dtrap_ddt()
     benchmark_dtrap_ddt_varlen()
     benchmark_dacs_segsum()
     benchmark_dadt()
+    benchmark_dacs_segsum_varlen()
