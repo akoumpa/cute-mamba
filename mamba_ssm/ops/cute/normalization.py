@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
 
 def _can_use_quack_rmsnorm(x, weight, bias, *, gated_api):
@@ -36,8 +37,12 @@ def _can_use_quack_layernorm(x, weight, bias):
         and x.stride(-1) == 1
         and weight.stride(-1) == 1
         and (bias is None or bias.stride(-1) == 1)
-        and not any(
-            tensor is not None and tensor.requires_grad for tensor in (x, weight, bias)
+        and (
+            not torch.is_grad_enabled()
+            or not any(
+                tensor is not None and tensor.requires_grad
+                for tensor in (x, weight, bias)
+            )
         )
     )
 
@@ -112,6 +117,42 @@ def layer_norm_linear_fn_cute(
     residual_in_fp32=False,
     is_rms_norm=False,
 ):
+    if (
+        residual is None
+        and not prenorm
+        and not residual_in_fp32
+        and not is_rms_norm
+        and not torch.is_autocast_enabled()
+        and _can_use_quack_layernorm(x, norm_weight, norm_bias)
+        and linear_weight.is_cuda
+        and linear_weight.dtype == torch.bfloat16
+        and linear_weight.shape[-1] == x.shape[-1]
+        and linear_weight.stride(-1) == 1
+        and (
+            linear_bias is None
+            or (
+                linear_bias.is_cuda
+                and linear_bias.dtype == linear_weight.dtype
+                and linear_bias.shape == (linear_weight.shape[0],)
+                and linear_bias.stride(-1) == 1
+            )
+        )
+        and (
+            not torch.is_grad_enabled()
+            or not any(
+                tensor is not None and tensor.requires_grad
+                for tensor in (linear_weight, linear_bias)
+            )
+        )
+    ):
+        from quack.rmsnorm import layernorm_fwd
+
+        original_shape = x.shape
+        normalized = layernorm_fwd(
+            x.reshape(-1, original_shape[-1]), norm_weight, norm_bias, eps
+        ).reshape(original_shape)
+        return F.linear(normalized, linear_weight, linear_bias)
+
     from mamba_ssm.ops.triton.layer_norm import layer_norm_linear_fn
 
     return layer_norm_linear_fn(

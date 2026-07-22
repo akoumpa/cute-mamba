@@ -97,9 +97,9 @@ def test_quack_layernorm_promoted_inference_route():
     from mamba_ssm.ops.triton.layernorm_gated import layernorm_fn
 
     torch.manual_seed(22)
-    x = torch.randn(128, 256, device="cuda", dtype=torch.bfloat16)
-    weight = torch.randn(256, device="cuda")
-    bias = torch.randn(256, device="cuda")
+    x = torch.randn(128, 256, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    weight = torch.randn(256, device="cuda", requires_grad=True)
+    bias = torch.randn(256, device="cuda", requires_grad=True)
     with torch.no_grad():
         actual = layernorm_fn_cute(x, weight, bias)
         expected = layernorm_fn(x, weight, bias)
@@ -132,3 +132,46 @@ def test_gated_layernorm_uses_exact_fallback(monkeypatch):
     weight = torch.randn(64)
     bias = torch.randn(64)
     assert layernorm_fn_cute(x, weight, bias) is sentinel
+
+
+def test_quack_layernorm_linear_promoted_inference_route():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required")
+    from mamba_ssm.ops.cute.normalization import layer_norm_linear_fn_cute
+    from mamba_ssm.ops.triton.layer_norm import layer_norm_linear_fn
+
+    torch.manual_seed(23)
+    x = torch.randn(128, 256, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    norm_weight = torch.randn(256, device="cuda", requires_grad=True)
+    norm_bias = torch.randn(256, device="cuda", requires_grad=True)
+    linear_weight = torch.randn(
+        1024, 256, device="cuda", dtype=torch.bfloat16, requires_grad=True
+    )
+    linear_bias = torch.randn(
+        1024, device="cuda", dtype=torch.bfloat16, requires_grad=True
+    )
+    args = (x, norm_weight, norm_bias, linear_weight, linear_bias)
+    with torch.no_grad():
+        actual = layer_norm_linear_fn_cute(*args)
+        expected = layer_norm_linear_fn(*args)
+    torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
+
+
+def test_layernorm_linear_uses_exact_fallback(monkeypatch):
+    from mamba_ssm.ops.cute.normalization import layer_norm_linear_fn_cute
+
+    sentinel = object()
+    monkeypatch.setattr(
+        "mamba_ssm.ops.triton.layer_norm.layer_norm_linear_fn",
+        lambda *args, **kwargs: sentinel,
+    )
+    assert (
+        layer_norm_linear_fn_cute(
+            torch.randn(2, 64),
+            torch.randn(64),
+            torch.randn(64),
+            torch.randn(128, 64),
+            torch.randn(128),
+        )
+        is sentinel
+    )

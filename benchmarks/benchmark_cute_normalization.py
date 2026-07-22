@@ -3,10 +3,11 @@ from triton.testing import do_bench
 
 from mamba_ssm.ops.cute.normalization import (
     layer_norm_fn_cute,
+    layer_norm_linear_fn_cute,
     layernorm_fn_cute,
     rmsnorm_fn_cute,
 )
-from mamba_ssm.ops.triton.layer_norm import layer_norm_fn
+from mamba_ssm.ops.triton.layer_norm import layer_norm_fn, layer_norm_linear_fn
 from mamba_ssm.ops.triton.layernorm_gated import layernorm_fn, rmsnorm_fn
 
 
@@ -95,8 +96,40 @@ def benchmark_layernorm_case(dtype, rows, width):
         )
 
 
+def benchmark_layernorm_linear_case(dtype, rows, width, output_width):
+    torch.manual_seed(2)
+    x = torch.randn(rows, width, device="cuda", dtype=dtype)
+    norm_weight = torch.randn(width, device="cuda")
+    norm_bias = torch.randn(width, device="cuda")
+    linear_weight = torch.randn(output_width, width, device="cuda", dtype=dtype)
+    linear_bias = torch.randn(output_width, device="cuda", dtype=dtype)
+
+    def cute_fn():
+        return layer_norm_linear_fn_cute(
+            x, norm_weight, norm_bias, linear_weight, linear_bias, eps=1e-6
+        )
+
+    def triton_fn():
+        return layer_norm_linear_fn(
+            x, norm_weight, norm_bias, linear_weight, linear_bias, eps=1e-6
+        )
+
+    cute_fn()
+    triton_fn()
+    cute_ms = do_bench(cute_fn, warmup=25, rep=100)
+    triton_ms = do_bench(triton_fn, warmup=25, rep=100)
+    print(
+        f"op=layernorm_linear_fwd dtype={dtype} rows={rows} width={width} "
+        f"output_width={output_width} speedup={triton_ms / cute_ms:.3f} "
+        f"cute_ms={cute_ms:.4f} triton_ms={triton_ms:.4f}",
+        flush=True,
+    )
+
+
 if __name__ == "__main__":
     for case in CASES:
         benchmark_case(*case)
     for case in CASES:
         benchmark_layernorm_case(*case)
+    for rows in (128, 512, 2048):
+        benchmark_layernorm_linear_case(torch.bfloat16, rows, 256, 1024)
