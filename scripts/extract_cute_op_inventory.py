@@ -409,7 +409,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba3_mimo_cute",
     },
     "triton.mamba3.mamba3_mimo_utils.bwd_dadt_fused_triton": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dadt_fused_cute",
     },
     "triton.mamba3.mamba3_mimo_utils.bwd_dtrap_ddt_triton": {

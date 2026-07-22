@@ -29,8 +29,13 @@ def compute_dacs_segsum_cute(da, chunk_size):
 
 
 def bwd_dadt_fused_cute(dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev, chunk_size):
-    batch, nheads, seqlen = ddA_cs.shape
-    if seqlen % chunk_size != 0:
+    seqlen = ddA_cs.shape[-1]
+    use_cute = (
+        seqlen % chunk_size == 0
+        and chunk_size <= 64
+        and ddA_cs.dtype in (torch.float16, torch.bfloat16)
+    )
+    if not use_cute:
         from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import (
             bwd_dadt_fused_triton,
         )
@@ -38,17 +43,9 @@ def bwd_dadt_fused_cute(dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev, chunk
         return bwd_dadt_fused_triton(
             dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev, chunk_size
         )
-    nchunks = seqlen // chunk_size
-    shape = (batch, nheads, nchunks, chunk_size)
-    term_cs = (dA_cs.exp() * ddA_cs).view(shape).flip(-1).cumsum(-1).flip(-1)
-    scaled_rev = (dA_cs_rev.exp() * ddA_cs_rev).view(shape)
-    term_rev = F.pad(scaled_rev.cumsum(-1)[..., :-1], (1, 0))
-    weighted = dSSdA.transpose(-1, -2).float() * SSdA.float().exp()
-    mask = torch.ones(
-        chunk_size, chunk_size, device=dSSdA.device, dtype=torch.bool
-    ).tril(-1)
-    term_seg = weighted.flip(-2).cumsum(-2).flip(-2).masked_fill(~mask, 0).sum(-1)
-    return (term_cs.float() + term_rev.float() + term_seg).view(batch, nheads, seqlen)
+    from mamba_ssm.ops.cute.mamba3.dadt_backward import bwd_dadt_fixed_cute
+
+    return bwd_dadt_fixed_cute(dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev)
 
 
 def bwd_dtrap_ddt_cute(trap, dt, dfactor, dgamma_diag, chunk_size):

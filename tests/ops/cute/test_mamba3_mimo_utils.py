@@ -23,6 +23,19 @@ def _compute_dacs_segsum_padded_ref(da, chunk_size):
     return da_cs, da_cs_rev, segsum.masked_fill(~mask, 0)
 
 
+def _bwd_dadt_eager_ref(dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev):
+    shape = (*ddA_cs.shape[:2], dSSdA.shape[2], dSSdA.shape[-1])
+    term_cs = (dA_cs.exp() * ddA_cs).view(shape).flip(-1).cumsum(-1).flip(-1)
+    scaled_rev = (dA_cs_rev.exp() * ddA_cs_rev).view(shape)
+    term_rev = F.pad(scaled_rev.cumsum(-1)[..., :-1], (1, 0))
+    weighted = dSSdA.transpose(-1, -2).float() * SSdA.float().exp()
+    mask = torch.ones(
+        dSSdA.shape[-1], dSSdA.shape[-1], device=dSSdA.device, dtype=torch.bool
+    ).tril(-1)
+    term_seg = weighted.flip(-2).cumsum(-2).flip(-2).masked_fill(~mask, 0).sum(-1)
+    return (term_cs.float() + term_rev.float() + term_seg).flatten(-2)
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("seqlen,chunk_size", [(64, 16), (75, 32), (128, 64)])
 def test_compute_dacs_segsum_cute(dtype, seqlen, chunk_size):
@@ -51,29 +64,50 @@ def test_compute_dacs_segsum_cute(dtype, seqlen, chunk_size):
         )
 
 
-def test_bwd_dadt_fused_cute():
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("chunk_size", [16, 32, 64])
+def test_bwd_dadt_fused_cute(dtype, chunk_size):
     _require_cuda()
     from mamba_ssm.ops.cute.mamba3.mamba3_mimo_utils import bwd_dadt_fused_cute
     from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import bwd_dadt_fused_triton
 
     torch.manual_seed(1)
-    batch, nheads, seqlen, chunk_size = 2, 3, 64, 32
+    batch, nheads, seqlen = 2, 3, 128
     nchunks = seqlen // chunk_size
-    dA_cs = -torch.rand(batch, nheads, seqlen, device="cuda")
+    dA_cs = -torch.rand(batch, nheads, seqlen, device="cuda", dtype=dtype)
     dA_cs_rev = -torch.rand_like(dA_cs)
     ddA_cs = torch.randn_like(dA_cs)
     ddA_cs_rev = torch.randn_like(dA_cs)
     SSdA = (
-        torch.randn(batch, nheads, nchunks, chunk_size, chunk_size, device="cuda") * 0.1
+        torch.randn(
+            batch,
+            nheads,
+            nchunks,
+            chunk_size,
+            chunk_size,
+            device="cuda",
+            dtype=dtype,
+        )
+        * 0.1
     )
     dSSdA = torch.randn_like(SSdA)
     actual = bwd_dadt_fused_cute(
         dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev, chunk_size
     )
-    expected = bwd_dadt_fused_triton(
-        dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev, chunk_size
+    expected = (
+        bwd_dadt_fused_triton(
+            dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev, chunk_size
+        )
+        if dtype == torch.float32
+        else _bwd_dadt_eager_ref(dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev)
     )
-    torch.testing.assert_close(actual, expected, rtol=2e-3, atol=3e-3)
+    if dtype == torch.bfloat16:
+        rtol, atol = 2e-2, 1e-1
+    elif dtype == torch.float16:
+        rtol, atol = 1e-2, 2e-2
+    else:
+        rtol, atol = 2e-3, 3e-3
+    torch.testing.assert_close(actual, expected, rtol=rtol, atol=atol)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
