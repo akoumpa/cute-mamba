@@ -655,6 +655,7 @@ def _can_use_chunk_state_gemm(B, x, dt, dA_cumsum, seq_idx):
     )
 
 
+@cache
 def _compile_chunk_state_pack(x_dtype, b_dtype, dt_dtype, da_dtype):
     tile_size = 32
     items_per_thread = tile_size * tile_size // _NUM_THREADS
