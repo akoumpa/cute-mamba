@@ -13,7 +13,6 @@ from quack.reduce import row_reduce
 
 _LOG2E = 1.4426950408889634
 _NUM_THREADS = 256
-_VEC_SIZE = 8
 
 
 @cache
@@ -23,6 +22,7 @@ def _compile_state_passing_fwd(
     initial_dtype,
     output_dtype,
     index_dtype,
+    vec_size: int,
     *,
     has_initial: bool,
     has_seq_idx: bool,
@@ -45,7 +45,7 @@ def _compile_state_passing_fwd(
             chunk_size: Int32,
             stream: cuda.CUstream,
         ):
-            feature_blocks = cute.ceil_div(dim, _VEC_SIZE)
+            feature_blocks = cute.ceil_div(dim, vec_size)
             work = Int64(batch) * nheads * feature_blocks
             self.kernel(
                 mStates,
@@ -92,11 +92,11 @@ def _compile_state_passing_fwd(
                 outer = linear // feature_blocks
                 head = outer % nheads
                 batch_idx = outer // nheads
-                feature = feature_block * _VEC_SIZE
-                values = [Float32(0.0) for _ in range(_VEC_SIZE)]
+                feature = feature_block * vec_size
+                values = [Float32(0.0) for _ in range(vec_size)]
                 initial_base = (batch_idx * nheads + head) * dim + feature
                 if const_expr(has_initial):
-                    for item in cutlass.range_constexpr(_VEC_SIZE):
+                    for item in cutlass.range_constexpr(vec_size):
                         if feature + item < dim:
                             values[item] = Float32(mInitial[initial_base + item])
 
@@ -105,7 +105,7 @@ def _compile_state_passing_fwd(
                     state_base = (
                         (batch_idx * nchunks + chunk) * nheads + head
                     ) * dim + feature
-                    for item in cutlass.range_constexpr(_VEC_SIZE):
+                    for item in cutlass.range_constexpr(vec_size):
                         if feature + item < dim:
                             mOut[state_base + item] = output_dtype(values[item])
 
@@ -120,13 +120,13 @@ def _compile_state_passing_fwd(
                         if seq_new != seq:
                             scale = Float32(0.0)
                         seq = seq_new
-                    for item in cutlass.range_constexpr(_VEC_SIZE):
+                    for item in cutlass.range_constexpr(vec_size):
                         if feature + item < dim:
                             values[item] = scale * values[item] + Float32(
                                 mStates[state_base + item]
                             )
 
-                for item in cutlass.range_constexpr(_VEC_SIZE):
+                for item in cutlass.range_constexpr(vec_size):
                     if feature + item < dim:
                         mFinal[initial_base + item] = values[item]
 
@@ -191,6 +191,7 @@ def state_passing_fwd_cute(
         else None,
         torch2cute_dtype_map[out_dtype],
         torch2cute_dtype_map[seq_idx.dtype] if seq_idx is not None else None,
+        4 if states.dtype == torch.float32 else 8,
         has_initial=initial_states is not None,
         has_seq_idx=seq_idx is not None,
     )
