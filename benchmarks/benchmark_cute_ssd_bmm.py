@@ -1,8 +1,12 @@
+import os
+
 import torch
 from triton.testing import do_bench
 
 from mamba_ssm.ops.cute.ssd_bmm import _bmm_chunk_bwd_cute, _bmm_chunk_fwd_cute
 from mamba_ssm.ops.triton.ssd_bmm import _bmm_chunk_bwd, _bmm_chunk_fwd
+
+os.environ["MAMBA_DISABLE_BACKEND_DISPATCH"] = "1"
 
 
 CASES = [

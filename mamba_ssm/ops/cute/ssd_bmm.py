@@ -23,7 +23,7 @@ def _chunk_view(x, chunk_size):
     return x.view(batch * (seqlen // chunk_size), chunk_size, x.shape[-1])
 
 
-def _gemm_sm90_nonpersistent(a, b, out, *, tile_n):
+def _gemm_sm90_nonpersistent(a, b, out, *, tile_m):
     from quack.gemm import gemm
 
     gemm(
@@ -32,7 +32,7 @@ def _gemm_sm90_nonpersistent(a, b, out, *, tile_n):
         out,
         None,
         None,
-        tile_n,
+        tile_m,
         128,
         1,
         1,
@@ -67,7 +67,8 @@ def _bmm_chunk_fwd_cute(
         device=a.device,
         dtype=a.dtype if output_dtype is None else output_dtype,
     )
-    _gemm_sm90_nonpersistent(a_chunks, b_chunks, out, tile_n=128)
+    tile_m = 256 if a_chunks.shape[0] >= 64 and chunk_size >= 256 else 128
+    _gemm_sm90_nonpersistent(a_chunks, b_chunks, out, tile_m=tile_m)
     out = out.view(batch, nchunks, chunk_size, chunk_size)
     return out if a.dim() == 3 else out.unsqueeze(2)
 
@@ -88,11 +89,12 @@ def _bmm_chunk_bwd_cute(a, dout, residual=None, out=None):
     if out is not None:
         out_view = _chunk_view(out, chunk_size)
     result = torch.empty_like(a_chunks) if out_view is None else out_view
+    tile_m = 256 if a_chunks.shape[0] >= 128 and chunk_size >= 256 else 128
     _gemm_sm90_nonpersistent(
         dout_chunks.transpose(-1, -2),
         a_chunks.transpose(-1, -2),
         result,
-        tile_n=128,
+        tile_m=tile_m,
     )
     result = result.view(batch, seqlen, a.shape[-1])
     if a.dim() == 4:

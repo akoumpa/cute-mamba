@@ -65,3 +65,16 @@ def test_bmm_chunk_cute_falls_back_for_unaligned_state(dtype):
     actual_bwd = _bmm_chunk_bwd_cute(a, dout)
     expected_bwd = _bmm_chunk_bwd(a, dout)
     torch.testing.assert_close(actual_bwd, expected_bwd, rtol=2e-2, atol=2e-2)
+
+
+def test_bmm_chunk_fwd_dispatches_large_aligned_workload(monkeypatch):
+    _require_cute()
+    import mamba_ssm.ops.cute.ssd_bmm as cute_bmm
+    import mamba_ssm.ops.triton.ssd_bmm as triton_bmm
+
+    sentinel = object()
+    monkeypatch.setattr(triton_bmm, "is_cute_dsl_available", lambda: True)
+    monkeypatch.setattr(cute_bmm, "_bmm_chunk_fwd_cute", lambda *args: sentinel)
+
+    a = torch.empty(8, 2048, 64, device="cuda", dtype=torch.bfloat16)
+    assert triton_bmm._bmm_chunk_fwd(a, a, 256) is sentinel
