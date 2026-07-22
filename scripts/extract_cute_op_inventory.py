@@ -337,7 +337,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_split_conv1d_scan_combined_cute",
     },
     "triton.mamba3.grouped_head_reduction.reduce_grouped_qk_grads": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/mamba3/grouped_head_reduction.py:reduce_grouped_qk_grads_cute",
     },
     "triton.mamba3.grouped_head_reduction.reduce_grouped_qk_grads_and_bias_triton": {

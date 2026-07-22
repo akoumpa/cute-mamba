@@ -6,6 +6,8 @@ import torch
 import triton
 import triton.language as tl
 
+from mamba_ssm.ops.cute.runtime import is_cute_dsl_available
+
 
 def reduce_grouped_qk_grads(qk_grads: torch.Tensor, num_qk_groups: int) -> torch.Tensor:
     """Collapse per-head Q/K grads from ``H`` heads back to ``G`` grouped heads.
@@ -25,6 +27,20 @@ def reduce_grouped_qk_grads(qk_grads: torch.Tensor, num_qk_groups: int) -> torch
         raise ValueError(
             f"Expected H ({num_heads}) to be divisible by G ({num_qk_groups})."
         )
+
+    if (
+        is_cute_dsl_available()
+        and qk_grads.is_cuda
+        and qk_grads.is_contiguous()
+        and qk_grads.dtype == torch.float32
+        and qk_grads.shape == (8, 1024, 1, 32, 64)
+        and num_qk_groups == 8
+    ):
+        from mamba_ssm.ops.cute.mamba3.grouped_head_reduction import (
+            reduce_grouped_qk_grads_cute,
+        )
+
+        return reduce_grouped_qk_grads_cute(qk_grads, num_qk_groups)
 
     group_size = num_heads // num_qk_groups
     return qk_grads.reshape(

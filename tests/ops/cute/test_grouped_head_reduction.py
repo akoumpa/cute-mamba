@@ -44,3 +44,18 @@ def test_reduce_grouped_qk_grads_and_bias_cute(dtype, num_heads, num_groups):
     expected = reduce_grouped_qk_grads_and_bias_triton(dq, dk, num_groups)
     for actual_tensor, expected_tensor in zip(actual, expected):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=2e-3, atol=4e-3)
+
+
+def test_reduce_grouped_qk_grads_dispatches_proven_fp32_shape(monkeypatch):
+    _require_cute()
+    import mamba_ssm.ops.cute.mamba3.grouped_head_reduction as cute_reduction
+    import mamba_ssm.ops.triton.mamba3.grouped_head_reduction as triton_reduction
+
+    sentinel = object()
+    monkeypatch.setattr(triton_reduction, "is_cute_dsl_available", lambda: True)
+    monkeypatch.setattr(
+        cute_reduction, "reduce_grouped_qk_grads_cute", lambda *args: sentinel
+    )
+
+    grads = torch.empty(8, 1024, 1, 32, 64, device="cuda", dtype=torch.float32)
+    assert triton_reduction.reduce_grouped_qk_grads(grads, 8) is sentinel
