@@ -23,7 +23,7 @@ def _chunk_view(x, chunk_size):
     return x.view(batch * (seqlen // chunk_size), chunk_size, x.shape[-1])
 
 
-def _gemm_sm90_nonpersistent(a, b, out, *, tile_m):
+def _gemm_sm90_nonpersistent(a, b, out, *, tile_m, tile_n=128):
     from quack.gemm import gemm
 
     gemm(
@@ -33,7 +33,7 @@ def _gemm_sm90_nonpersistent(a, b, out, *, tile_m):
         None,
         None,
         tile_m,
-        128,
+        tile_n,
         1,
         1,
         False,
@@ -95,6 +95,7 @@ def _bmm_chunk_bwd_cute(a, dout, residual=None, out=None):
         a_chunks.transpose(-1, -2),
         result,
         tile_m=tile_m,
+        tile_n=64 if a_chunks.shape[-1] <= 64 else 128,
     )
     result = result.view(batch, seqlen, a.shape[-1])
     if a.dim() == 4:
