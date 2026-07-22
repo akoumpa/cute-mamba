@@ -58,6 +58,30 @@ def test_compute_dzdo_cute(dtype):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_compute_ddt_dtrap_cute(dtype):
+    _require_cuda()
+    from mamba_ssm.ops.cute.mamba3.mamba3_siso import (
+        compute_ddt_dtrap_dinput_states_cute,
+    )
+    from mamba_ssm.ops.triton.mamba3.mamba3_siso_bwd import (
+        compute_ddt_dtrap_dinput_states,
+    )
+
+    torch.manual_seed(12)
+    tensors = [torch.randn(2, 5, 71, device="cuda", dtype=dtype) for _ in range(4)]
+    actual = compute_ddt_dtrap_dinput_states_cute(*tensors)
+    expected = compute_ddt_dtrap_dinput_states(*tensors)
+    rtol, atol = (2e-2, 2e-2) if dtype == torch.bfloat16 else (2e-3, 3e-3)
+    for actual_tensor, expected_tensor in zip(actual, expected):
+        if actual_tensor is None:
+            assert expected_tensor is None
+        else:
+            torch.testing.assert_close(
+                actual_tensor, expected_tensor, rtol=rtol, atol=atol
+            )
+
+
 @pytest.mark.parametrize("qk_dim,v_dim,angle_dim", [(32, 16, 8), (128, 64, 32)])
 @pytest.mark.parametrize("with_optional", [False, True])
 def test_mamba3_siso_step_cute(with_optional, qk_dim, v_dim, angle_dim):

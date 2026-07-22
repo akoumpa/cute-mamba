@@ -596,6 +596,14 @@ def compute_ddt_dtrap_dinput_states_cute(
     input_v_state: Optional[torch.Tensor] = None,
     Cu_Seqlens: Optional[torch.Tensor] = None,
 ):
+    if d_issm_state is None and Cu_Seqlens is None:
+        from mamba_ssm.ops.cute.mamba3.mamba3_siso_scalar_bwd import (
+            compute_ddt_dtrap_cute,
+        )
+
+        ddt, dtrap = compute_ddt_dtrap_cute(dscale, dgamma, dt, trap)
+        return ddt, dtrap, None, None, None
+
     from mamba_ssm.ops.triton.mamba3.mamba3_siso_bwd import (
         compute_ddt_dtrap_dinput_states,
     )

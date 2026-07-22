@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 62,
-    "promoted": 7
+    "present_unverified": 61,
+    "promoted": 8
   },
   "routes": [
     {
@@ -498,7 +498,7 @@
       "id": "triton.mamba3.mamba3_siso_bwd.compute_ddt_dtrap_dinput_states",
       "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_ddt_dtrap_dinput_states_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "compute_ddt_dtrap_dinput_states"
     },
     {

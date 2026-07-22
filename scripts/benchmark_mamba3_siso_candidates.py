@@ -2,10 +2,14 @@ import torch
 import triton
 
 from mamba_ssm.ops.cute.mamba3.mamba3_siso import (
+    compute_ddt_dtrap_dinput_states_cute,
     compute_dzdo_cute,
     mamba3_siso_step_cute,
 )
-from mamba_ssm.ops.triton.mamba3.mamba3_siso_bwd import compute_dzdo
+from mamba_ssm.ops.triton.mamba3.mamba3_siso_bwd import (
+    compute_ddt_dtrap_dinput_states,
+    compute_dzdo,
+)
 from mamba_ssm.ops.triton.mamba3.mamba3_siso_step import mamba3_siso_step
 
 
@@ -56,6 +60,19 @@ def benchmark_step():
         )
 
 
+def benchmark_ddt_dtrap():
+    for seqlen in (128, 1024, 4096):
+        shape = (2, 16, seqlen)
+        args = [torch.randn(shape, device="cuda") for _ in range(4)]
+        cute_ms = bench(lambda: compute_ddt_dtrap_dinput_states_cute(*args))
+        triton_ms = bench(lambda: compute_ddt_dtrap_dinput_states(*args))
+        print(
+            f"ddt_dtrap seqlen={seqlen}: cute={cute_ms:.4f} ms "
+            f"triton={triton_ms:.4f} ms speedup={triton_ms / cute_ms:.3f}x"
+        )
+
+
 if __name__ == "__main__":
     benchmark_dzdo()
+    benchmark_ddt_dtrap()
     benchmark_step()

@@ -381,7 +381,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:apply_dk_state_post_cute",
     },
     "triton.mamba3.mamba3_siso_bwd.compute_ddt_dtrap_dinput_states": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_ddt_dtrap_dinput_states_cute",
     },
     "triton.mamba3.mamba3_siso_combined.mamba3_siso_combined": {
