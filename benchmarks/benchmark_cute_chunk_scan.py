@@ -2,10 +2,25 @@ import torch
 from triton.testing import do_bench
 
 from mamba_ssm.ops.cute.ssd_chunk_scan import (
+    chunk_scan_bwd_dC_cute,
+    chunk_scan_bwd_dcb_cute,
+    chunk_scan_bwd_ddAcs_prev_cute,
+    chunk_scan_bwd_ddAcs_stable_cute,
+    chunk_scan_bwd_dstates_cute,
+    chunk_scan_bwd_dx_cute,
     chunk_scan_bwd_dz_cute,
     chunk_scan_fwd_cute,
 )
-from mamba_ssm.ops.triton.ssd_chunk_scan import _chunk_scan_bwd_dz, _chunk_scan_fwd
+from mamba_ssm.ops.triton.ssd_chunk_scan import (
+    _chunk_scan_bwd_dC,
+    _chunk_scan_bwd_dcb,
+    _chunk_scan_bwd_ddAcs_prev,
+    _chunk_scan_bwd_ddAcs_stable,
+    _chunk_scan_bwd_dstates,
+    _chunk_scan_bwd_dx,
+    _chunk_scan_bwd_dz,
+    _chunk_scan_fwd,
+)
 
 
 CASES = [
@@ -52,6 +67,36 @@ def benchmark_case(dtype, batch, seqlen, nheads, headdim, dstate, chunk_size):
             "bwd_dz",
             lambda: chunk_scan_bwd_dz_cute(x, z, out, dout, chunk_size, True, D),
             lambda: _chunk_scan_bwd_dz(x, z, out, dout, chunk_size, True, D),
+        ),
+        (
+            "bwd_dstates",
+            lambda: chunk_scan_bwd_dstates_cute(C, dA, dout),
+            lambda: _chunk_scan_bwd_dstates(C, dA, dout),
+        ),
+        (
+            "bwd_dC",
+            lambda: chunk_scan_bwd_dC_cute(states, dA, dout, C=C, ngroups=ngroups),
+            lambda: _chunk_scan_bwd_dC(states, dA, dout, C=C, ngroups=ngroups),
+        ),
+        (
+            "bwd_dx",
+            lambda: chunk_scan_bwd_dx_cute(cb, x, dt, dA, dout, D),
+            lambda: _chunk_scan_bwd_dx(cb, x, dt, dA, dout, D),
+        ),
+        (
+            "bwd_dcb",
+            lambda: chunk_scan_bwd_dcb_cute(x, dt, dA, dout, ngroups=ngroups),
+            lambda: _chunk_scan_bwd_dcb(x, dt, dA, dout, ngroups=ngroups),
+        ),
+        (
+            "bwd_ddA_stable",
+            lambda: chunk_scan_bwd_ddAcs_stable_cute(x, dt, dA, dout, cb),
+            lambda: _chunk_scan_bwd_ddAcs_stable(x, dt, dA, dout, cb),
+        ),
+        (
+            "bwd_ddA_prev",
+            lambda: chunk_scan_bwd_ddAcs_prev_cute(states, C, dout, dA),
+            lambda: _chunk_scan_bwd_ddAcs_prev(states, C, dout, dA),
         ),
     )
 
