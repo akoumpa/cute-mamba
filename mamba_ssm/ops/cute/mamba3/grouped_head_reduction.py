@@ -293,7 +293,7 @@ def reduce_grouped_qk_grads_and_bias_cute(
     )
     dq_bias = torch.empty(nheads, rank, dim, device=dq_raw.device, dtype=torch.float32)
     dk_bias = torch.empty_like(dq_bias)
-    vec_size = 4 if dim % 4 == 0 else 1
+    vec_size = 8 if dim % 8 == 0 else 4 if dim % 4 == 0 else 1
     compiled = _compile_qk_bias_reduction(torch2cute_dtype_map[dq_raw.dtype], vec_size)
     compiled(
         dq_raw.view(-1),
