@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 46,
-    "promoted": 23
+    "present_unverified": 45,
+    "promoted": 24
   },
   "routes": [
     {
@@ -466,7 +466,7 @@
       "id": "triton.mamba3.mamba3_siso_bwd.compute_dzdo",
       "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_dzdo_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "compute_dzdo"
     },
     {

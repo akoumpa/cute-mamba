@@ -6,7 +6,9 @@ import cuda.bindings.driver as cuda
 import cutlass
 import cutlass.cute as cute
 import torch
-from cutlass import Float32, Int64
+from cutlass import BFloat16, Float32, Int32, Int64, const_expr
+from cutlass._mlir.dialects import vector
+from cutlass.cutlass_dsl import T, dsl_user_op
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
 from mamba_ssm.ops.cute.mamba3.utils import sigmoid_approx
@@ -14,10 +16,45 @@ from mamba_ssm.ops.cute.mamba3.utils import sigmoid_approx
 
 _NUM_THREADS = 256
 _VEC_SIZE = 1
+_PACKED_BF16_MIN_ELEMENTS = 1 << 22
+
+
+@dsl_user_op
+def _i32_to_bf16x2(value: Int32, *, loc=None, ip=None):
+    packed = vector.from_elements(
+        T.vector(1, T.i32()), (value.ir_value(),), loc=loc, ip=ip
+    )
+    unpacked = vector.bitcast(T.vector(2, T.bf16()), packed, loc=loc, ip=ip)
+    return tuple(
+        BFloat16(
+            vector.extract(
+                unpacked,
+                dynamic_position=[],
+                static_position=[index],
+                loc=loc,
+                ip=ip,
+            )
+        )
+        for index in range(2)
+    )
+
+
+@dsl_user_op
+def _bf16x2_to_i32(first: BFloat16, second: BFloat16, *, loc=None, ip=None):
+    unpacked = vector.from_elements(
+        T.vector(2, T.bf16()),
+        (first.ir_value(), second.ir_value()),
+        loc=loc,
+        ip=ip,
+    )
+    packed = vector.bitcast(T.vector(1, T.i32()), unpacked, loc=loc, ip=ip)
+    return Int32(
+        vector.extract(packed, dynamic_position=[], static_position=[0], loc=loc, ip=ip)
+    )
 
 
 @cache
-def _compile_compute_dzdo(do_dtype, z_dtype, o_dtype):
+def _compile_compute_dzdo(do_dtype, z_dtype, o_dtype, *, packed_bf16: bool):
     class ComputeDzDo:
         @cute.jit
         def __call__(
@@ -30,7 +67,7 @@ def _compile_compute_dzdo(do_dtype, z_dtype, o_dtype):
             count: Int64,
             stream: cuda.CUstream,
         ):
-            work = cute.ceil_div(count, _VEC_SIZE)
+            work = count // 2 if const_expr(packed_bf16) else count
             self.kernel(mDo, mZ, mO, mDz, mDoScaled, count).launch(
                 grid=[cute.ceil_div(work, _NUM_THREADS), 1, 1],
                 block=[_NUM_THREADS, 1, 1],
@@ -50,18 +87,50 @@ def _compile_compute_dzdo(do_dtype, z_dtype, o_dtype):
             tidx, _, _ = cute.arch.thread_idx()
             block, _, _ = cute.arch.block_idx()
             base = (Int64(block) * _NUM_THREADS + tidx) * _VEC_SIZE
-            for item in cutlass.range_constexpr(_VEC_SIZE):
-                index = base + item
-                if index < count:
-                    grad = Float32(mDo[index])
-                    z = Float32(mZ[index])
-                    output = Float32(mO[index])
-                    sigmoid = sigmoid_approx(z)
-                    silu = z * sigmoid
-                    mDz[index] = do_dtype(
-                        grad * output * (sigmoid + silu * (Float32(1.0) - sigmoid))
+            if const_expr(packed_bf16):
+                packed_index = Int64(block) * _NUM_THREADS + tidx
+                if packed_index < count // 2:
+                    do_packed = cute.recast_tensor(mDo, Int32)
+                    z_packed = cute.recast_tensor(mZ, Int32)
+                    o_packed = cute.recast_tensor(mO, Int32)
+                    dz_packed = cute.recast_tensor(mDz, Int32)
+                    do_scaled_packed = cute.recast_tensor(mDoScaled, Int32)
+                    grad0, grad1 = _i32_to_bf16x2(do_packed[packed_index])
+                    z0, z1 = _i32_to_bf16x2(z_packed[packed_index])
+                    output0, output1 = _i32_to_bf16x2(o_packed[packed_index])
+                    sigmoid0 = sigmoid_approx(Float32(z0))
+                    sigmoid1 = sigmoid_approx(Float32(z1))
+                    silu0 = Float32(z0) * sigmoid0
+                    silu1 = Float32(z1) * sigmoid1
+                    dz0 = do_dtype(
+                        Float32(grad0)
+                        * Float32(output0)
+                        * (sigmoid0 + silu0 * (Float32(1.0) - sigmoid0))
                     )
-                    mDoScaled[index] = do_dtype(grad * silu)
+                    dz1 = do_dtype(
+                        Float32(grad1)
+                        * Float32(output1)
+                        * (sigmoid1 + silu1 * (Float32(1.0) - sigmoid1))
+                    )
+                    do_scaled0 = do_dtype(Float32(grad0) * silu0)
+                    do_scaled1 = do_dtype(Float32(grad1) * silu1)
+                    dz_packed[packed_index] = _bf16x2_to_i32(dz0, dz1)
+                    do_scaled_packed[packed_index] = _bf16x2_to_i32(
+                        do_scaled0, do_scaled1
+                    )
+            else:
+                for item in cutlass.range_constexpr(_VEC_SIZE):
+                    index = base + item
+                    if index < count:
+                        grad = Float32(mDo[index])
+                        z = Float32(mZ[index])
+                        output = Float32(mO[index])
+                        sigmoid = sigmoid_approx(z)
+                        silu = z * sigmoid
+                        mDz[index] = do_dtype(
+                            grad * output * (sigmoid + silu * (Float32(1.0) - sigmoid))
+                        )
+                        mDoScaled[index] = do_dtype(grad * silu)
 
     def fake(dtype):
         return cute.runtime.make_fake_tensor(
@@ -82,16 +151,26 @@ def _compile_compute_dzdo(do_dtype, z_dtype, o_dtype):
 
 
 def compute_dzdo_cute(do, z, o, chunk_size=64):
-    del chunk_size
-    if z.shape != do.shape or o.shape != do.shape:
-        raise AssertionError("Z, O, and dO must have identical shapes")
-    if any(not tensor.is_cuda or not tensor.is_contiguous() for tensor in (do, z, o)):
-        raise ValueError("CuTe gate gradients require contiguous CUDA tensors")
+    supported = (
+        z.shape == do.shape
+        and o.shape == do.shape
+        and do.dtype == z.dtype == o.dtype == torch.bfloat16
+        and do.numel() >= _PACKED_BF16_MIN_ELEMENTS
+        and do.numel() % 2 == 0
+        and all(tensor.is_cuda and tensor.is_contiguous() for tensor in (do, z, o))
+        and torch.cuda.get_device_capability(do.device)[0] >= 9
+    )
+    if not supported:
+        from mamba_ssm.ops.triton.mamba3.mamba3_siso_bwd import compute_dzdo
+
+        return compute_dzdo(do, z, o, chunk_size)
+
     dz, do_scaled = torch.empty_like(do), torch.empty_like(do)
     compiled = _compile_compute_dzdo(
         torch2cute_dtype_map[do.dtype],
         torch2cute_dtype_map[z.dtype],
         torch2cute_dtype_map[o.dtype],
+        packed_bf16=True,
     )
     compiled(
         do.view(-1),

@@ -58,6 +58,35 @@ def test_compute_dzdo_cute(dtype):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)
 
 
+def test_compute_dzdo_cute_small_uses_exact_fallback(monkeypatch):
+    _require_cuda()
+    from mamba_ssm.ops.cute.mamba3.mamba3_siso import compute_dzdo_cute
+
+    sentinel = (object(), object())
+    monkeypatch.setattr(
+        "mamba_ssm.ops.triton.mamba3.mamba3_siso_bwd.compute_dzdo",
+        lambda *args, **kwargs: sentinel,
+    )
+    tensors = [torch.randn(2, 8, 2, 16, device="cuda", dtype=torch.bfloat16)] * 3
+    assert compute_dzdo_cute(*tensors) is sentinel
+
+
+def test_compute_dzdo_cute_packed_bf16():
+    _require_cuda()
+    from mamba_ssm.ops.cute.mamba3.mamba3_siso import compute_dzdo_cute
+    from mamba_ssm.ops.triton.mamba3.mamba3_siso_bwd import compute_dzdo
+
+    torch.manual_seed(14)
+    shape = (1, 1024, 64, 64)
+    tensors = [
+        torch.randn(shape, device="cuda", dtype=torch.bfloat16) for _ in range(3)
+    ]
+    actual = compute_dzdo_cute(*tensors)
+    expected = compute_dzdo(*tensors)
+    for actual_tensor, expected_tensor in zip(actual, expected):
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=2e-2, atol=2e-2)
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_compute_ddt_dtrap_cute(dtype):
     _require_cuda()
