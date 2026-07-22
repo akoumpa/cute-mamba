@@ -61,6 +61,20 @@ def test_reduce_grouped_qk_grads_dispatches_proven_fp32_shape(monkeypatch):
     assert triton_reduction.reduce_grouped_qk_grads(grads, 8) is sentinel
 
 
+def test_reduce_grouped_qk_grads_dispatches_aligned_bf16_shape(monkeypatch):
+    _require_cute()
+    import mamba_ssm.ops.cute.mamba3.grouped_head_reduction as cute_reduction
+    import mamba_ssm.ops.triton.mamba3.grouped_head_reduction as triton_reduction
+
+    sentinel = object()
+    monkeypatch.setattr(triton_reduction, "is_cute_dsl_available", lambda: True)
+    monkeypatch.setattr(
+        cute_reduction, "reduce_grouped_qk_grads_cute", lambda *args: sentinel
+    )
+    grads = torch.empty(1, 1024, 1, 8, 64, device="cuda", dtype=torch.bfloat16)
+    assert triton_reduction.reduce_grouped_qk_grads(grads, 2) is sentinel
+
+
 def test_grouped_qk_grads_and_bias_dispatches_bf16_identity_groups(monkeypatch):
     _require_cute()
     import mamba_ssm.ops.cute.mamba3.grouped_head_reduction as cute_reduction

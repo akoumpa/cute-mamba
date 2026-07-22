@@ -28,13 +28,23 @@ def reduce_grouped_qk_grads(qk_grads: torch.Tensor, num_qk_groups: int) -> torch
             f"Expected H ({num_heads}) to be divisible by G ({num_qk_groups})."
         )
 
+    proven_fp32_shape = (
+        qk_grads.dtype == torch.float32
+        and qk_grads.shape == (8, 1024, 1, 32, 64)
+        and num_qk_groups == 8
+    )
+    proven_bf16_shape = (
+        qk_grads.dtype == torch.bfloat16
+        and qk_grads.shape[0] * qk_grads.shape[1] >= 1024
+        and qk_grads.shape[3] > num_qk_groups
+        and qk_grads.shape[-1] % 4 == 0
+    )
     if (
         is_cute_dsl_available()
         and qk_grads.is_cuda
         and qk_grads.is_contiguous()
-        and qk_grads.dtype == torch.float32
-        and qk_grads.shape == (8, 1024, 1, 32, 64)
-        and num_qk_groups == 8
+        and torch.cuda.get_device_capability(qk_grads.device)[0] >= 9
+        and (proven_fp32_shape or proven_bf16_shape)
     ):
         from mamba_ssm.ops.cute.mamba3.grouped_head_reduction import (
             reduce_grouped_qk_grads_cute,
@@ -42,7 +52,13 @@ def reduce_grouped_qk_grads(qk_grads: torch.Tensor, num_qk_groups: int) -> torch
 
         return reduce_grouped_qk_grads_cute(qk_grads, num_qk_groups)
 
-    group_size = num_heads // num_qk_groups
+    return _reduce_grouped_qk_grads_torch(qk_grads, num_qk_groups)
+
+
+def _reduce_grouped_qk_grads_torch(
+    qk_grads: torch.Tensor, num_qk_groups: int
+) -> torch.Tensor:
+    group_size = qk_grads.shape[3] // num_qk_groups
     return qk_grads.reshape(
         *qk_grads.shape[:3],
         num_qk_groups,

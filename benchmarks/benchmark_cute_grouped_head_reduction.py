@@ -6,12 +6,14 @@ from mamba_ssm.ops.cute.mamba3.grouped_head_reduction import (
     reduce_grouped_qk_grads_cute,
 )
 from mamba_ssm.ops.triton.mamba3.grouped_head_reduction import (
+    _reduce_grouped_qk_grads_torch,
     _reduce_grouped_qk_grads_and_bias_triton,
-    reduce_grouped_qk_grads,
 )
 
 
 CASES = [
+    (torch.bfloat16, 1, 1024, 1, 8, 2, 64),
+    (torch.bfloat16, 2, 2048, 2, 16, 4, 64),
     (torch.bfloat16, 8, 2048, 4, 64, 4, 128),
     (torch.bfloat16, 2, 4096, 4, 64, 4, 128),
     (torch.float32, 8, 1024, 1, 32, 8, 64),
@@ -25,7 +27,7 @@ def benchmark_case(dtype, batch, seqlen, rank, heads, groups, dim):
         return reduce_grouped_qk_grads_cute(x, groups)
 
     def torch_fn():
-        return reduce_grouped_qk_grads(x, groups)
+        return _reduce_grouped_qk_grads_torch(x, groups)
 
     cute_fn()
     torch_fn()

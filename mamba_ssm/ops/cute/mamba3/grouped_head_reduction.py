@@ -9,7 +9,7 @@ import torch
 from cutlass import Float32, Int32, Int64, const_expr
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
-from mamba_ssm.ops.cute.mamba3.packing import i32_to_bf16x2
+from mamba_ssm.ops.cute.mamba3.packing import bf16x2_to_i32, i32_to_bf16x2
 
 
 _NUM_THREADS = 256
@@ -24,7 +24,9 @@ def _warp_sum(value: Float32) -> Float32:
 
 
 @cache
-def _compile_reduce_grouped_qk_grads(input_dtype, group_size: int, vec_size: int):
+def _compile_reduce_grouped_qk_grads(
+    input_dtype, group_size: int, vec_size: int, *, packed_bf16: bool
+):
     class ReduceGroupedQKGrads:
         @cute.jit
         def __call__(
@@ -71,14 +73,33 @@ def _compile_reduce_grouped_qk_grads(input_dtype, group_size: int, vec_size: int
                     (row * rank + rank_idx) * nheads + group * group_size
                 ) * dim + feature
                 values = [Float32(0.0) for _ in range(vec_size)]
-                for head_offset in cutlass.range_constexpr(group_size):
-                    for item in cutlass.range_constexpr(vec_size):
-                        values[item] += Float32(
-                            mInput[input_idx + head_offset * dim + item]
-                        )
+                if const_expr(packed_bf16):
+                    mInputPacked = cute.recast_tensor(mInput, Int32)
+                    for head_offset in cutlass.range_constexpr(group_size):
+                        packed_idx = (input_idx + head_offset * dim) // 2
+                        for pair in cutlass.range_constexpr(vec_size // 2):
+                            first, second = i32_to_bf16x2(
+                                mInputPacked[packed_idx + pair]
+                            )
+                            values[pair * 2] += Float32(first)
+                            values[pair * 2 + 1] += Float32(second)
+                else:
+                    for head_offset in cutlass.range_constexpr(group_size):
+                        for item in cutlass.range_constexpr(vec_size):
+                            values[item] += Float32(
+                                mInput[input_idx + head_offset * dim + item]
+                            )
                 output_idx = ((row * rank + rank_idx) * ngroups + group) * dim + feature
-                for item in cutlass.range_constexpr(vec_size):
-                    mOutput[output_idx + item] = input_dtype(values[item])
+                if const_expr(packed_bf16):
+                    mOutputPacked = cute.recast_tensor(mOutput, Int32)
+                    for pair in cutlass.range_constexpr(vec_size // 2):
+                        mOutputPacked[output_idx // 2 + pair] = bf16x2_to_i32(
+                            input_dtype(values[pair * 2]),
+                            input_dtype(values[pair * 2 + 1]),
+                        )
+                else:
+                    for item in cutlass.range_constexpr(vec_size):
+                        mOutput[output_idx + item] = input_dtype(values[item])
 
     def fake():
         return cute.runtime.make_fake_tensor(
@@ -128,7 +149,10 @@ def reduce_grouped_qk_grads_cute(
     )
     vec_size = 4 if dim % 4 == 0 else 1
     compiled = _compile_reduce_grouped_qk_grads(
-        torch2cute_dtype_map[qk_grads.dtype], num_heads // num_qk_groups, vec_size
+        torch2cute_dtype_map[qk_grads.dtype],
+        num_heads // num_qk_groups,
+        vec_size,
+        packed_bf16=qk_grads.dtype == torch.bfloat16 and dim % 4 == 0,
     )
     compiled(
         qk_grads.view(-1),
@@ -143,7 +167,9 @@ def reduce_grouped_qk_grads_cute(
 
 
 @cache
-def _compile_reduce_grouped_qk_grads_pair(input_dtype, group_size: int, vec_size: int):
+def _compile_reduce_grouped_qk_grads_pair(
+    input_dtype, group_size: int, vec_size: int, *, packed_bf16: bool
+):
     class ReduceGroupedQKGradsPair:
         @cute.jit
         def __call__(
@@ -197,15 +223,41 @@ def _compile_reduce_grouped_qk_grads_pair(input_dtype, group_size: int, vec_size
                 ) * dim + feature
                 dq_values = [Float32(0.0) for _ in range(vec_size)]
                 dk_values = [Float32(0.0) for _ in range(vec_size)]
-                for head_offset in cutlass.range_constexpr(group_size):
-                    for item in cutlass.range_constexpr(vec_size):
-                        offset = input_idx + head_offset * dim + item
-                        dq_values[item] += Float32(mDQ[offset])
-                        dk_values[item] += Float32(mDK[offset])
+                if const_expr(packed_bf16):
+                    mDQPacked = cute.recast_tensor(mDQ, Int32)
+                    mDKPacked = cute.recast_tensor(mDK, Int32)
+                    for head_offset in cutlass.range_constexpr(group_size):
+                        packed_idx = (input_idx + head_offset * dim) // 2
+                        for pair in cutlass.range_constexpr(vec_size // 2):
+                            dq0, dq1 = i32_to_bf16x2(mDQPacked[packed_idx + pair])
+                            dk0, dk1 = i32_to_bf16x2(mDKPacked[packed_idx + pair])
+                            dq_values[pair * 2] += Float32(dq0)
+                            dq_values[pair * 2 + 1] += Float32(dq1)
+                            dk_values[pair * 2] += Float32(dk0)
+                            dk_values[pair * 2 + 1] += Float32(dk1)
+                else:
+                    for head_offset in cutlass.range_constexpr(group_size):
+                        for item in cutlass.range_constexpr(vec_size):
+                            offset = input_idx + head_offset * dim + item
+                            dq_values[item] += Float32(mDQ[offset])
+                            dk_values[item] += Float32(mDK[offset])
                 output_idx = ((row * rank + rank_idx) * ngroups + group) * dim + feature
-                for item in cutlass.range_constexpr(vec_size):
-                    mDQOut[output_idx + item] = input_dtype(dq_values[item])
-                    mDKOut[output_idx + item] = input_dtype(dk_values[item])
+                if const_expr(packed_bf16):
+                    mDQOutPacked = cute.recast_tensor(mDQOut, Int32)
+                    mDKOutPacked = cute.recast_tensor(mDKOut, Int32)
+                    for pair in cutlass.range_constexpr(vec_size // 2):
+                        mDQOutPacked[output_idx // 2 + pair] = bf16x2_to_i32(
+                            input_dtype(dq_values[pair * 2]),
+                            input_dtype(dq_values[pair * 2 + 1]),
+                        )
+                        mDKOutPacked[output_idx // 2 + pair] = bf16x2_to_i32(
+                            input_dtype(dk_values[pair * 2]),
+                            input_dtype(dk_values[pair * 2 + 1]),
+                        )
+                else:
+                    for item in cutlass.range_constexpr(vec_size):
+                        mDQOut[output_idx + item] = input_dtype(dq_values[item])
+                        mDKOut[output_idx + item] = input_dtype(dk_values[item])
 
     def fake():
         return cute.runtime.make_fake_tensor(
@@ -244,7 +296,10 @@ def _reduce_grouped_qk_grads_pair_cute(
     dk_out = torch.empty_like(dq_out)
     vec_size = 4 if dim % 4 == 0 else 1
     compiled = _compile_reduce_grouped_qk_grads_pair(
-        torch2cute_dtype_map[dq_raw.dtype], nheads // num_qk_groups, vec_size
+        torch2cute_dtype_map[dq_raw.dtype],
+        nheads // num_qk_groups,
+        vec_size,
+        packed_bf16=dq_raw.dtype == torch.bfloat16 and dim % 4 == 0,
     )
     compiled(
         dq_raw.view(-1),
