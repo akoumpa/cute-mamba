@@ -32,6 +32,24 @@ def test_angle_dt_fwd_cute(dtype, varlen):
     torch.testing.assert_close(actual[1], expected[1], rtol=3e-3, atol=5e-3)
 
 
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_angle_dt_fwd_chunked_cute(dtype):
+    _require_cute()
+    from mamba_ssm.ops.cute.mamba3.angle_dt import angle_dt_fwd_cute
+    from mamba_ssm.ops.triton.mamba3.angle_dt import angle_dt_fwd
+
+    torch.manual_seed(2)
+    batch, seqlen, nheads, dim = 2, 128, 4, 32
+    angle = torch.randn(batch, seqlen, nheads, dim, device="cuda", dtype=dtype)
+    dt = torch.randn(batch, nheads, seqlen, device="cuda", dtype=dtype)
+    initial = torch.randn(batch, nheads, dim, device="cuda")
+    actual = angle_dt_fwd_cute(angle, dt, initial, 64, True)
+    expected = angle_dt_fwd(angle, dt, initial, 64, True)
+    rtol, atol = (5e-3, 2e-2) if dtype == torch.bfloat16 else (3e-3, 5e-3)
+    torch.testing.assert_close(actual[0], expected[0], rtol=rtol, atol=atol)
+    torch.testing.assert_close(actual[1], expected[1], rtol=rtol, atol=atol)
+
+
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("varlen", [False, True])
 def test_angle_dt_bwd_cute(dtype, varlen):
