@@ -141,6 +141,124 @@ def reduce_grouped_qk_grads_cute(
 
 
 @cache
+def _compile_reduce_grouped_qk_grads_pair(input_dtype, group_size: int, vec_size: int):
+    class ReduceGroupedQKGradsPair:
+        @cute.jit
+        def __call__(
+            self,
+            mDQ: cute.Tensor,
+            mDK: cute.Tensor,
+            mDQOut: cute.Tensor,
+            mDKOut: cute.Tensor,
+            total_rows: Int32,
+            rank: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            dim: Int32,
+            stream: cuda.CUstream,
+        ):
+            work = Int64(total_rows) * rank * ngroups * (dim // vec_size)
+            self.kernel(
+                mDQ, mDK, mDQOut, mDKOut, work, rank, nheads, ngroups, dim
+            ).launch(
+                grid=[cute.ceil_div(work, _NUM_THREADS), 1, 1],
+                block=[_NUM_THREADS, 1, 1],
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(
+            self,
+            mDQ: cute.Tensor,
+            mDK: cute.Tensor,
+            mDQOut: cute.Tensor,
+            mDKOut: cute.Tensor,
+            work: Int64,
+            rank: Int32,
+            nheads: Int32,
+            ngroups: Int32,
+            dim: Int32,
+        ):
+            tidx, _, _ = cute.arch.thread_idx()
+            block, _, _ = cute.arch.block_idx()
+            linear = Int64(block) * _NUM_THREADS + tidx
+            if linear < work:
+                feature_block = linear % (dim // vec_size)
+                outer = linear // (dim // vec_size)
+                group = outer % ngroups
+                outer = outer // ngroups
+                rank_idx = outer % rank
+                row = outer // rank
+                feature = feature_block * vec_size
+                input_idx = (
+                    (row * rank + rank_idx) * nheads + group * group_size
+                ) * dim + feature
+                dq_values = [Float32(0.0) for _ in range(vec_size)]
+                dk_values = [Float32(0.0) for _ in range(vec_size)]
+                for head_offset in cutlass.range_constexpr(group_size):
+                    for item in cutlass.range_constexpr(vec_size):
+                        offset = input_idx + head_offset * dim + item
+                        dq_values[item] += Float32(mDQ[offset])
+                        dk_values[item] += Float32(mDK[offset])
+                output_idx = ((row * rank + rank_idx) * ngroups + group) * dim + feature
+                for item in cutlass.range_constexpr(vec_size):
+                    mDQOut[output_idx + item] = input_dtype(dq_values[item])
+                    mDKOut[output_idx + item] = input_dtype(dk_values[item])
+
+    def fake():
+        return cute.runtime.make_fake_tensor(
+            input_dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+        )
+
+    return cute.compile(
+        ReduceGroupedQKGradsPair(),
+        fake(),
+        fake(),
+        fake(),
+        fake(),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+        options="--enable-tvm-ffi",
+    )
+
+
+def _reduce_grouped_qk_grads_pair_cute(
+    dq_raw: torch.Tensor, dk_raw: torch.Tensor, num_qk_groups: int
+):
+    batch, seqlen, rank, nheads, dim = dq_raw.shape
+    dq_out = torch.empty(
+        batch,
+        seqlen,
+        rank,
+        num_qk_groups,
+        dim,
+        device=dq_raw.device,
+        dtype=dq_raw.dtype,
+    )
+    dk_out = torch.empty_like(dq_out)
+    vec_size = 4 if dim % 4 == 0 else 1
+    compiled = _compile_reduce_grouped_qk_grads_pair(
+        torch2cute_dtype_map[dq_raw.dtype], nheads // num_qk_groups, vec_size
+    )
+    compiled(
+        dq_raw.view(-1),
+        dk_raw.view(-1),
+        dq_out.view(-1),
+        dk_out.view(-1),
+        batch * seqlen,
+        rank,
+        nheads,
+        num_qk_groups,
+        dim,
+    )
+    return dq_out, dk_out
+
+
+@cache
 def _compile_qk_bias_reduction(input_dtype, vec_size: int):
     class QKBiasReduction:
         @cute.jit
@@ -281,16 +399,15 @@ def reduce_grouped_qk_grads_and_bias_cute(
         raise ValueError(
             f"Expected H ({nheads}) to be divisible by G ({num_qk_groups})."
         )
-    dq_out = (
-        dq_raw
-        if nheads == num_qk_groups
-        else reduce_grouped_qk_grads_cute(dq_raw, num_qk_groups)
-    )
-    dk_out = (
-        dk_raw
-        if nheads == num_qk_groups
-        else reduce_grouped_qk_grads_cute(dk_raw, num_qk_groups)
-    )
+    if nheads == num_qk_groups:
+        dq_out, dk_out = dq_raw, dk_raw
+    elif dq_raw.dtype == torch.bfloat16:
+        dq_out, dk_out = _reduce_grouped_qk_grads_pair_cute(
+            dq_raw, dk_raw, num_qk_groups
+        )
+    else:
+        dq_out = reduce_grouped_qk_grads_cute(dq_raw, num_qk_groups)
+        dk_out = reduce_grouped_qk_grads_cute(dk_raw, num_qk_groups)
     dq_bias = torch.empty(nheads, rank, dim, device=dq_raw.device, dtype=torch.float32)
     dk_bias = torch.empty_like(dq_bias)
     vec_size = 8 if dim % 8 == 0 else 4 if dim % 4 == 0 else 1
