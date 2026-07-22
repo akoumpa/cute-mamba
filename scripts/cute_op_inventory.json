@@ -1,24 +1,24 @@
 {
   "counts": {
-    "missing": 2,
-    "present_unverified": 64,
+    "missing": 0,
+    "present_unverified": 66,
     "promoted": 3
   },
   "routes": [
     {
       "group": "selective_scan",
       "id": "selective_scan_interface.selective_scan_fn",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/selective_scan.py:selective_scan_cute",
       "source": "mamba_ssm/ops/selective_scan_interface.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "selective_scan_fn"
     },
     {
       "group": "selective_scan",
       "id": "selective_scan_interface.mamba_inner_fn",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/selective_scan.py:mamba_inner_cute",
       "source": "mamba_ssm/ops/selective_scan_interface.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba_inner_fn"
     },
     {

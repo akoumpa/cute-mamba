@@ -184,6 +184,14 @@ SURFACE = [
 
 
 CUTE_ROUTES = {
+    "selective_scan_interface.selective_scan_fn": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/selective_scan.py:selective_scan_cute",
+    },
+    "selective_scan_interface.mamba_inner_fn": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/selective_scan.py:mamba_inner_cute",
+    },
     "triton.softplus.softplus": {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/softplus.py:softplus",
