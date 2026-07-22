@@ -4,10 +4,12 @@ import triton
 from mamba_ssm.ops.cute.mamba3.mamba3_mimo_utils import (
     bwd_dtrap_ddt_cute,
     bwd_dtrap_ddt_cute_varlen,
+    compute_dacs_segsum_cute,
 )
 from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import (
     bwd_dtrap_ddt_triton,
     bwd_dtrap_ddt_triton_varlen,
+    compute_dacs_segsum_triton,
 )
 
 
@@ -50,6 +52,20 @@ def benchmark_dtrap_ddt_varlen():
         )
 
 
+def benchmark_dacs_segsum():
+    for dtype in (torch.float32, torch.bfloat16):
+        for chunk_size in (16, 32, 64):
+            da = torch.randn(2, 16, 4096, device="cuda", dtype=dtype) * 0.1
+            cute_ms = bench(lambda: compute_dacs_segsum_cute(da, chunk_size))
+            triton_ms = bench(lambda: compute_dacs_segsum_triton(da, chunk_size))
+            print(
+                f"dacs_segsum dtype={dtype} chunk={chunk_size}: "
+                f"cute={cute_ms:.4f} ms triton={triton_ms:.4f} ms "
+                f"speedup={triton_ms / cute_ms:.3f}x"
+            )
+
+
 if __name__ == "__main__":
     benchmark_dtrap_ddt()
     benchmark_dtrap_ddt_varlen()
+    benchmark_dacs_segsum()

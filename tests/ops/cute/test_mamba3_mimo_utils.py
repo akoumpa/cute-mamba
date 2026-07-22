@@ -1,5 +1,6 @@
 import pytest
 import torch
+import torch.nn.functional as F
 
 
 def _require_cuda():
@@ -7,19 +8,47 @@ def _require_cuda():
         pytest.skip("CUDA is required")
 
 
+def _compute_dacs_segsum_padded_ref(da, chunk_size):
+    seqlen = da.shape[-1]
+    padded = F.pad(da, (0, (-seqlen) % chunk_size))
+    chunks = padded.unflatten(-1, (-1, chunk_size))
+    prefix = chunks.cumsum(-1)
+    da_cs = prefix.clamp_max(0).flatten(-2)[..., :seqlen]
+    da_cs_rev = (chunks.sum(-1, keepdim=True) - prefix).clamp_max(0)
+    da_cs_rev = da_cs_rev.flatten(-2)[..., :seqlen]
+    mask = torch.ones(chunk_size, chunk_size, device=da.device, dtype=torch.bool).tril(
+        -1
+    )
+    segsum = (prefix.unsqueeze(-1) - prefix.unsqueeze(-2)).clamp_max(0)
+    return da_cs, da_cs_rev, segsum.masked_fill(~mask, 0)
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_compute_dacs_segsum_cute(dtype):
+@pytest.mark.parametrize("seqlen,chunk_size", [(64, 16), (75, 32), (128, 64)])
+def test_compute_dacs_segsum_cute(dtype, seqlen, chunk_size):
     _require_cuda()
+    from mamba_ssm.ops.cute.mamba3.dacs_segsum import (
+        compute_dacs_segsum_fixed_cute,
+    )
     from mamba_ssm.ops.cute.mamba3.mamba3_mimo_utils import compute_dacs_segsum_cute
     from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import compute_dacs_segsum_triton
 
     torch.manual_seed(0)
-    da = torch.randn(2, 3, 64, device="cuda", dtype=dtype) * 0.1
-    actual = compute_dacs_segsum_cute(da, 32)
-    expected = compute_dacs_segsum_triton(da, 32)
+    da = torch.randn(2, 3, seqlen, device="cuda", dtype=dtype) * 0.1
+    actual = compute_dacs_segsum_fixed_cute(da, chunk_size)
+    expected = (
+        compute_dacs_segsum_triton(da, chunk_size)
+        if seqlen % chunk_size == 0
+        else _compute_dacs_segsum_padded_ref(da, chunk_size)
+    )
     rtol, atol = (1e-2, 1.3e-1) if dtype == torch.bfloat16 else (2e-3, 3e-3)
     for actual_tensor, expected_tensor in zip(actual, expected):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)
+    dispatched = compute_dacs_segsum_cute(da, chunk_size)
+    for actual_tensor, dispatched_tensor in zip(actual, dispatched):
+        torch.testing.assert_close(
+            actual_tensor, dispatched_tensor, rtol=rtol, atol=atol
+        )
 
 
 def test_bwd_dadt_fused_cute():

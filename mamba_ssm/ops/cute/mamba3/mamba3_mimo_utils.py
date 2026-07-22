@@ -4,30 +4,28 @@ import torch
 import torch.nn.functional as F
 
 
-def _pad_to_chunk(x, chunk_size):
-    padding = (-x.shape[-1]) % chunk_size
-    return F.pad(x, (0, padding)) if padding else x
-
-
 def compute_dacs_segsum_cute(da, chunk_size):
-    batch, nheads, seqlen = da.shape
-    padded = _pad_to_chunk(da, chunk_size)
-    nchunks = padded.shape[-1] // chunk_size
-    chunks = padded.view(batch, nheads, nchunks, chunk_size)
-    da_cs_chunks_raw = chunks.cumsum(dim=-1)
-    da_cs_chunks = da_cs_chunks_raw.clamp_max(0)
-    da_cs_rev_chunks = (
-        chunks.sum(dim=-1, keepdim=True) - chunks.cumsum(dim=-1)
-    ).clamp_max(0)
-    row = da_cs_chunks_raw.unsqueeze(-1)
-    col = da_cs_chunks_raw.unsqueeze(-2)
-    mask = torch.ones(chunk_size, chunk_size, device=da.device, dtype=torch.bool).tril(
-        -1
+    from mamba_ssm.ops.cute.mamba3.dacs_segsum import (
+        compute_dacs_segsum_fixed_cute,
     )
-    segsum = (row - col).clamp_max(0).masked_fill(~mask, 0)
-    da_cs = da_cs_chunks.view(batch, nheads, -1)[..., :seqlen]
-    da_cs_rev = da_cs_rev_chunks.view(batch, nheads, -1)[..., :seqlen]
-    return da_cs, da_cs_rev, segsum
+
+    batch, nheads, seqlen = da.shape
+    nchunks = (seqlen + chunk_size - 1) // chunk_size
+    work = batch * nheads * nchunks
+    use_cute = seqlen % chunk_size != 0
+    if da.dtype == torch.bfloat16:
+        threshold = 512 if chunk_size <= 16 else 1024 if chunk_size <= 32 else 128
+        use_cute |= chunk_size <= 64 and work >= threshold
+    elif da.dtype == torch.float32:
+        use_cute |= chunk_size == 64 and work >= 1024
+    if use_cute:
+        return compute_dacs_segsum_fixed_cute(da, chunk_size)
+
+    from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import (
+        compute_dacs_segsum_triton,
+    )
+
+    return compute_dacs_segsum_triton(da, chunk_size)
 
 
 def bwd_dadt_fused_cute(dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev, chunk_size):
