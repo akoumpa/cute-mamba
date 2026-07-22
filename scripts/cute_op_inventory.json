@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 6,
-    "present_unverified": 60,
+    "missing": 2,
+    "present_unverified": 64,
     "promoted": 3
   },
   "routes": [
@@ -48,9 +48,9 @@
     {
       "group": "normalization",
       "id": "triton.layer_norm.layer_norm_fn",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/normalization.py:layer_norm_fn_cute",
       "source": "mamba_ssm/ops/triton/layer_norm.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "layer_norm_fn"
     },
     {
@@ -64,25 +64,25 @@
     {
       "group": "normalization",
       "id": "triton.layer_norm.layer_norm_linear_fn",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/normalization.py:layer_norm_linear_fn_cute",
       "source": "mamba_ssm/ops/triton/layer_norm.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "layer_norm_linear_fn"
     },
     {
       "group": "normalization",
       "id": "triton.layernorm_gated.layernorm_fn",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/normalization.py:layernorm_fn_cute",
       "source": "mamba_ssm/ops/triton/layernorm_gated.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "layernorm_fn"
     },
     {
       "group": "normalization",
       "id": "triton.layernorm_gated.rmsnorm_fn",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/normalization.py:rmsnorm_fn_cute",
       "source": "mamba_ssm/ops/triton/layernorm_gated.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "rmsnorm_fn"
     },
     {

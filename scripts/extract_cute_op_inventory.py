@@ -208,6 +208,22 @@ CUTE_ROUTES = {
         "status": "promoted",
         "implementation": "quack.rmsnorm:rmsnorm",
     },
+    "triton.layer_norm.layer_norm_fn": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/normalization.py:layer_norm_fn_cute",
+    },
+    "triton.layer_norm.layer_norm_linear_fn": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/normalization.py:layer_norm_linear_fn_cute",
+    },
+    "triton.layernorm_gated.layernorm_fn": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/normalization.py:layernorm_fn_cute",
+    },
+    "triton.layernorm_gated.rmsnorm_fn": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/normalization.py:rmsnorm_fn_cute",
+    },
     "triton.selective_state_update.selective_state_update": {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/selective_state_update.py:selective_state_update_cute",
