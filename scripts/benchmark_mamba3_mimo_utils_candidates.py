@@ -1,8 +1,14 @@
 import torch
 import triton
 
-from mamba_ssm.ops.cute.mamba3.mamba3_mimo_utils import bwd_dtrap_ddt_cute
-from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import bwd_dtrap_ddt_triton
+from mamba_ssm.ops.cute.mamba3.mamba3_mimo_utils import (
+    bwd_dtrap_ddt_cute,
+    bwd_dtrap_ddt_cute_varlen,
+)
+from mamba_ssm.ops.triton.mamba3.mamba3_mimo_utils import (
+    bwd_dtrap_ddt_triton,
+    bwd_dtrap_ddt_triton_varlen,
+)
 
 
 def bench(fn):
@@ -24,5 +30,26 @@ def benchmark_dtrap_ddt():
             )
 
 
+def benchmark_dtrap_ddt_varlen():
+    for num_sequences in (2, 8, 32):
+        lengths = torch.full((num_sequences,), 128, device="cuda", dtype=torch.int32)
+        cu_seqlens = torch.cat(
+            (
+                torch.zeros(1, device="cuda", dtype=torch.int32),
+                lengths.cumsum(0),
+            )
+        )
+        seqlen = int(cu_seqlens[-1])
+        args = [torch.randn(1, 16, seqlen, device="cuda") for _ in range(4)]
+        cute_ms = bench(lambda: bwd_dtrap_ddt_cute_varlen(*args, 64, cu_seqlens))
+        triton_ms = bench(lambda: bwd_dtrap_ddt_triton_varlen(*args, 64, cu_seqlens))
+        print(
+            f"dtrap_ddt_varlen sequences={num_sequences}: "
+            f"cute={cute_ms:.4f} ms triton={triton_ms:.4f} ms "
+            f"speedup={triton_ms / cute_ms:.3f}x"
+        )
+
+
 if __name__ == "__main__":
     benchmark_dtrap_ddt()
+    benchmark_dtrap_ddt_varlen()

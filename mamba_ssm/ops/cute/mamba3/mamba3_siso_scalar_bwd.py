@@ -5,7 +5,7 @@ from functools import cache
 import cuda.bindings.driver as cuda
 import cutlass.cute as cute
 import torch
-from cutlass import Float32, Int32, Int64
+from cutlass import Float32, Int32, Int64, const_expr
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
 from mamba_ssm.ops.cute.mamba3.utils import sigmoid_approx
@@ -16,7 +16,15 @@ _NUM_THREADS = 256
 
 @cache
 def _compile_ddt_dtrap(
-    dscale_dtype, dgamma_dtype, dt_dtype, trap_dtype, ddt_dtype, dtrap_dtype
+    dscale_dtype,
+    dgamma_dtype,
+    dt_dtype,
+    trap_dtype,
+    ddt_dtype,
+    dtrap_dtype,
+    index_dtype,
+    *,
+    is_varlen: bool,
 ):
     class ComputeDdtDtrap:
         @cute.jit
@@ -28,12 +36,23 @@ def _compile_ddt_dtrap(
             mTrap: cute.Tensor,
             mDdt: cute.Tensor,
             mDtrap: cute.Tensor,
+            mCuSeqlens: cute.Tensor | None,
             count: Int64,
             seqlen: Int32,
+            num_sequences: Int32,
             stream: cuda.CUstream,
         ):
             self.kernel(
-                mDscale, mDgamma, mDt, mTrap, mDdt, mDtrap, count, seqlen
+                mDscale,
+                mDgamma,
+                mDt,
+                mTrap,
+                mDdt,
+                mDtrap,
+                mCuSeqlens,
+                count,
+                seqlen,
+                num_sequences,
             ).launch(
                 grid=[cute.ceil_div(count, _NUM_THREADS), 1, 1],
                 block=[_NUM_THREADS, 1, 1],
@@ -49,8 +68,10 @@ def _compile_ddt_dtrap(
             mTrap: cute.Tensor,
             mDdt: cute.Tensor,
             mDtrap: cute.Tensor,
+            mCuSeqlens: cute.Tensor | None,
             count: Int64,
             seqlen: Int32,
+            num_sequences: Int32,
         ):
             tidx, _, _ = cute.arch.thread_idx()
             block, _, _ = cute.arch.block_idx()
@@ -61,7 +82,21 @@ def _compile_ddt_dtrap(
                 dt = Float32(mDt[index])
                 trap = sigmoid_approx(Float32(mTrap[index]))
                 dscale_prev = Float32(0.0)
-                if index % seqlen != 0:
+                token = Int32(index % seqlen)
+                is_sequence_start = token == 0
+                if const_expr(is_varlen):
+                    lower = Int32(0)
+                    upper = num_sequences
+                    while lower < upper:
+                        middle = (lower + upper) // 2
+                        boundary = Int32(mCuSeqlens[middle])
+                        if boundary < token:
+                            lower = middle + 1
+                        else:
+                            upper = middle
+                    if lower < num_sequences:
+                        is_sequence_start = Int32(mCuSeqlens[lower]) == token
+                if not is_sequence_start:
                     dscale_prev = Float32(mDscale[index - 1])
                 combined = dgamma + dscale
                 mDdt[index] = ddt_dtype(
@@ -84,7 +119,9 @@ def _compile_ddt_dtrap(
         fake(trap_dtype),
         fake(ddt_dtype),
         fake(dtrap_dtype),
+        fake(index_dtype) if is_varlen else None,
         Int64(0),
+        Int32(0),
         Int32(0),
         cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
         options="--enable-tvm-ffi",
@@ -92,7 +129,13 @@ def _compile_ddt_dtrap(
 
 
 def compute_shifted_scalar_grads_cute(
-    dscale, dgamma, dt, trap, *, output_float32=False
+    dscale,
+    dgamma,
+    dt,
+    trap,
+    *,
+    output_float32=False,
+    cu_seqlens=None,
 ):
     if dgamma.shape != dscale.shape or dt.shape != dscale.shape:
         raise AssertionError("dscale, dgamma, and dt must have identical shapes")
@@ -113,6 +156,8 @@ def compute_shifted_scalar_grads_cute(
         torch2cute_dtype_map[trap.dtype],
         torch2cute_dtype_map[ddt_dtype],
         torch2cute_dtype_map[dtrap_dtype],
+        torch2cute_dtype_map[cu_seqlens.dtype] if cu_seqlens is not None else None,
+        is_varlen=cu_seqlens is not None,
     )
     compiled(
         dscale.view(-1),
@@ -121,8 +166,10 @@ def compute_shifted_scalar_grads_cute(
         trap.view(-1),
         ddt.view(-1),
         dtrap.view(-1),
+        cu_seqlens.view(-1) if cu_seqlens is not None else None,
         dscale.numel(),
         dscale.shape[-1],
+        cu_seqlens.numel() - 1 if cu_seqlens is not None else 0,
     )
     return ddt, dtrap
 

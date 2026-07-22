@@ -134,21 +134,14 @@ def bwd_dadt_fused_cute_varlen(
 
 
 def bwd_dtrap_ddt_cute_varlen(trap, dt, dfactor, dgamma_diag, chunk_size, cu_seqlens):
-    ddt = torch.zeros_like(dt)
-    dtrap = torch.zeros_like(trap)
-    for start, end in _sequence_ranges(cu_seqlens):
-        if start == end:
-            continue
-        seq_ddt, seq_dtrap = bwd_dtrap_ddt_cute(
-            trap[..., start:end],
-            dt[..., start:end],
-            dfactor[..., start:end],
-            dgamma_diag[..., start:end],
-            chunk_size,
-        )
-        ddt[..., start:end] = seq_ddt
-        dtrap[..., start:end] = seq_dtrap
-    return ddt, dtrap
+    del chunk_size
+    from mamba_ssm.ops.cute.mamba3.mamba3_siso_scalar_bwd import (
+        compute_shifted_scalar_grads_cute,
+    )
+
+    return compute_shifted_scalar_grads_cute(
+        dfactor, dgamma_diag, dt, trap, cu_seqlens=cu_seqlens
+    )
 
 
 __all__ = [
