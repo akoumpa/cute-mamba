@@ -262,6 +262,7 @@ def _compile_chunk_cumsum_bwd(
     a_dtype,
     bias_dtype,
     chunk_size: int,
+    chunks_per_cta: int,
     *,
     has_bias: bool,
     dt_softplus: bool,
@@ -303,7 +304,11 @@ def _compile_chunk_cumsum_bwd(
                 dt_min,
                 dt_max,
             ).launch(
-                grid=[batch, nchunks, cute.ceil_div(nheads, _NUM_WARPS)],
+                grid=[
+                    batch,
+                    cute.ceil_div(nchunks, chunks_per_cta),
+                    cute.ceil_div(nheads, _NUM_WARPS),
+                ],
                 block=[_NUM_THREADS, 1, 1],
                 smem=2 * _NUM_WARPS * chunk_size * 4,
                 stream=stream,
@@ -327,7 +332,7 @@ def _compile_chunk_cumsum_bwd(
             dt_max: Float32,
         ):
             tidx, _, _ = cute.arch.thread_idx()
-            batch_idx, chunk, head_block = cute.arch.block_idx()
+            batch_idx, chunk_block, head_block = cute.arch.block_idx()
             lane = tidx % 32
             warp = tidx // 32
             head = head_block * _NUM_WARPS + warp
@@ -337,62 +342,81 @@ def _compile_chunk_cumsum_bwd(
             )
             sDt = smem.allocate_tensor(Float32, smem_layout, byte_alignment=16)
             sDDt = smem.allocate_tensor(Float32, smem_layout, byte_alignment=16)
-            for item in cutlass.range_constexpr(items_per_lane):
-                linear = tidx + item * _NUM_THREADS
-                pos = linear // _NUM_WARPS
-                local_head = linear - pos * _NUM_WARPS
-                load_head = head_block * _NUM_WARPS + local_head
-                token = chunk * chunk_size + pos
-                dt = Float32(0.0)
-                if pos < chunk_size and load_head < nheads and token < seqlen:
-                    dt_idx = (Int64(batch_idx) * seqlen + token) * nheads + load_head
-                    dt = Float32(mDt[dt_idx])
-                    if const_expr(has_bias):
-                        dt += Float32(mBias[load_head])
-                if pos < chunk_size:
-                    sDt[local_head, pos] = dt
-            cute.arch.sync_threads()
-
             dA_sum = Float32(0.0)
             dbias_sum = Float32(0.0)
+            a = Float32(0.0)
             if head < nheads:
                 a = Float32(mA[head])
+            for chunk_item in cutlass.range_constexpr(chunks_per_cta):
+                chunk = chunk_block * chunks_per_cta + chunk_item
                 for item in cutlass.range_constexpr(items_per_lane):
-                    pos = item * 32 + lane
+                    linear = tidx + item * _NUM_THREADS
+                    pos = linear // _NUM_WARPS
+                    local_head = linear - pos * _NUM_WARPS
+                    load_head = head_block * _NUM_WARPS + local_head
                     token = chunk * chunk_size + pos
-                    if pos < chunk_size and token < seqlen:
-                        chunk_idx = (
-                            (Int64(batch_idx) * nheads + head) * nchunks + chunk
-                        ) * chunk_size + pos
-                        ddA = Float32(mDDA[chunk_idx])
-                        ddt = ddA * a + Float32(mDDtOut[chunk_idx])
-                        dt = sDt[warp, pos]
-                        dt_pre_softplus = dt
-                        if const_expr(dt_softplus):
-                            dt = _softplus(dt)
-                        if dt < dt_min:
-                            dt = dt_min
-                            ddt = Float32(0.0)
-                        if dt > dt_max:
-                            dt = dt_max
-                            ddt = Float32(0.0)
-                        if const_expr(dt_softplus):
-                            if dt_pre_softplus <= Float32(20.0):
-                                ddt *= sigmoid(dt_pre_softplus)
-                        sDDt[warp, pos] = ddt
-                        dA_sum += ddA * dt
-                        dbias_sum += ddt
+                    dt = Float32(0.0)
+                    if (
+                        chunk < nchunks
+                        and pos < chunk_size
+                        and load_head < nheads
+                        and token < seqlen
+                    ):
+                        dt_idx = (
+                            Int64(batch_idx) * seqlen + token
+                        ) * nheads + load_head
+                        dt = Float32(mDt[dt_idx])
+                        if const_expr(has_bias):
+                            dt += Float32(mBias[load_head])
+                    if pos < chunk_size:
+                        sDt[local_head, pos] = dt
+                cute.arch.sync_threads()
 
-            cute.arch.sync_threads()
-            for item in cutlass.range_constexpr(items_per_lane):
-                linear = tidx + item * _NUM_THREADS
-                pos = linear // _NUM_WARPS
-                local_head = linear - pos * _NUM_WARPS
-                store_head = head_block * _NUM_WARPS + local_head
-                token = chunk * chunk_size + pos
-                if pos < chunk_size and store_head < nheads and token < seqlen:
-                    ddt_idx = (Int64(batch_idx) * seqlen + token) * nheads + store_head
-                    mDDt[ddt_idx] = dt_dtype(sDDt[local_head, pos])
+                if head < nheads and chunk < nchunks:
+                    for item in cutlass.range_constexpr(items_per_lane):
+                        pos = item * 32 + lane
+                        token = chunk * chunk_size + pos
+                        if pos < chunk_size and token < seqlen:
+                            chunk_idx = (
+                                (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                            ) * chunk_size + pos
+                            ddA = Float32(mDDA[chunk_idx])
+                            ddt = ddA * a + Float32(mDDtOut[chunk_idx])
+                            dt = sDt[warp, pos]
+                            dt_pre_softplus = dt
+                            if const_expr(dt_softplus):
+                                dt = _softplus(dt)
+                            if dt < dt_min:
+                                dt = dt_min
+                                ddt = Float32(0.0)
+                            if dt > dt_max:
+                                dt = dt_max
+                                ddt = Float32(0.0)
+                            if const_expr(dt_softplus):
+                                if dt_pre_softplus <= Float32(20.0):
+                                    ddt *= sigmoid(dt_pre_softplus)
+                            sDDt[warp, pos] = ddt
+                            dA_sum += ddA * dt
+                            dbias_sum += ddt
+
+                cute.arch.sync_threads()
+                for item in cutlass.range_constexpr(items_per_lane):
+                    linear = tidx + item * _NUM_THREADS
+                    pos = linear // _NUM_WARPS
+                    local_head = linear - pos * _NUM_WARPS
+                    store_head = head_block * _NUM_WARPS + local_head
+                    token = chunk * chunk_size + pos
+                    if (
+                        chunk < nchunks
+                        and pos < chunk_size
+                        and store_head < nheads
+                        and token < seqlen
+                    ):
+                        ddt_idx = (
+                            Int64(batch_idx) * seqlen + token
+                        ) * nheads + store_head
+                        mDDt[ddt_idx] = dt_dtype(sDDt[local_head, pos])
+                cute.arch.sync_threads()
 
             for offset in (16, 8, 4, 2, 1):
                 dA_sum += cute.arch.shuffle_sync_down(dA_sum, offset)
@@ -468,6 +492,7 @@ def chunk_cumsum_bwd_cute(
         torch2cute_dtype_map[A.dtype],
         torch2cute_dtype_map[dt_bias.dtype] if dt_bias is not None else None,
         chunk_size,
+        8 if batch * nchunks >= 256 else 1,
         has_bias=dt_bias is not None,
         dt_softplus=dt_softplus,
     )
