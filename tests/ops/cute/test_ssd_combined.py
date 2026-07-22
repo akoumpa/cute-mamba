@@ -293,3 +293,28 @@ def test_mamba_split_conv1d_scan_combined_cute():
     )
     for actual_grad, expected_grad in zip(actual_grads, expected_grads):
         torch.testing.assert_close(actual_grad, expected_grad, rtol=1e-1, atol=2e-1)
+
+
+def test_mamba_split_conv1d_scan_combined_cute_inference_uses_exact_fallback(
+    monkeypatch,
+):
+    from mamba_ssm.ops.cute.ssd_combined import (
+        mamba_split_conv1d_scan_combined_cute,
+    )
+
+    sentinel = object()
+    monkeypatch.setattr(
+        "mamba_ssm.ops.triton.ssd_combined.mamba_split_conv1d_scan_combined",
+        lambda *args, **kwargs: sentinel,
+    )
+    args = (
+        torch.randn(1, 8, 26),
+        torch.randn(16, 4),
+        torch.randn(16),
+        torch.randn(2),
+        torch.randn(2),
+        torch.randn(2, 4),
+        8,
+    )
+    with torch.no_grad():
+        assert mamba_split_conv1d_scan_combined_cute(*args) is sentinel

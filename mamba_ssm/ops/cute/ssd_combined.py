@@ -250,6 +250,15 @@ def mamba_split_conv1d_scan_combined_cute(
         or outproj_weight is not None
         or outproj_bias is not None
         or state_dtype is not None
+        or not _needs_backward(
+            zxbcdt,
+            conv1d_weight,
+            conv1d_bias,
+            dt_bias,
+            A,
+            D,
+            initial_states,
+        )
     ):
         from mamba_ssm.ops.triton.ssd_combined import (
             mamba_split_conv1d_scan_combined,

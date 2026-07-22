@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 48,
-    "promoted": 21
+    "present_unverified": 47,
+    "promoted": 22
   },
   "routes": [
     {
@@ -306,7 +306,7 @@
       "id": "triton.ssd_combined.mamba_split_conv1d_scan_combined",
       "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_split_conv1d_scan_combined_cute",
       "source": "mamba_ssm/ops/triton/ssd_combined.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "mamba_split_conv1d_scan_combined"
     },
     {
