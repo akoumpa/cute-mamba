@@ -221,6 +221,7 @@ def _compile_state_passing_bwd(
     dstates_dtype,
     converted_dtype,
     index_dtype,
+    vec_size: int,
     *,
     has_final: bool,
     has_initial: bool,
@@ -248,7 +249,7 @@ def _compile_state_passing_bwd(
             chunk_size: Int32,
             stream: cuda.CUstream,
         ):
-            nblocks = cute.ceil_div(dim, _NUM_THREADS)
+            nblocks = cute.ceil_div(dim, _NUM_THREADS * vec_size)
             self.kernel(
                 mStates,
                 mDecay,
@@ -293,12 +294,14 @@ def _compile_state_passing_bwd(
         ):
             tidx, _, _ = cute.arch.thread_idx()
             feature_block, batch_idx, head = cute.arch.block_idx()
-            feature = feature_block * _NUM_THREADS + tidx
+            feature = feature_block * (_NUM_THREADS * vec_size) + tidx
             outer_base = (Int64(batch_idx) * nheads + head) * dim
-            dstates = Float32(0.0)
+            dstates = [Float32(0.0) for _ in range(vec_size)]
             if const_expr(has_final):
-                if feature < dim:
-                    dstates = Float32(mDFinal[outer_base + feature])
+                for item in cutlass.range_constexpr(vec_size):
+                    item_feature = feature + item * _NUM_THREADS
+                    if item_feature < dim:
+                        dstates[item] = Float32(mDFinal[outer_base + item_feature])
 
             smem = cutlass.utils.SmemAllocator()
             reduction_buffer = smem.allocate_tensor(
@@ -308,17 +311,22 @@ def _compile_state_passing_bwd(
             if const_expr(has_seq_idx):
                 seq = Int32(mSeqIdx[Int64(batch_idx) * seqlen + seqlen - 1])
 
+            item_feature = Int32(0)
+            item_idx = Int64(0)
             for reverse_idx in cutlass.range(0, nchunks, 1, unroll=1):
                 chunk = nchunks - 1 - reverse_idx
                 state_idx = (
                     (Int64(batch_idx) * nchunks + chunk) * nheads + head
                 ) * dim + feature
-                if feature < dim:
-                    mDStates[state_idx] = dstates_dtype(dstates)
-                    if const_expr(convert_states):
-                        mStatesConverted[state_idx] = converted_dtype(
-                            Float32(mStates[state_idx])
-                        )
+                for item in cutlass.range_constexpr(vec_size):
+                    item_feature = feature + item * _NUM_THREADS
+                    item_idx = state_idx + item * _NUM_THREADS
+                    if item_feature < dim:
+                        mDStates[item_idx] = dstates_dtype(dstates[item])
+                        if const_expr(convert_states):
+                            mStatesConverted[item_idx] = converted_dtype(
+                                Float32(mStates[item_idx])
+                            )
 
                 if chunk > 0:
                     scale = cute.math.exp2(
@@ -335,8 +343,13 @@ def _compile_state_passing_bwd(
                             scale = Float32(0.0)
                         seq = seq_new
                     partial = Float32(0.0)
-                    if feature < dim:
-                        partial = Float32(mStates[state_idx]) * dstates * scale
+                    for item in cutlass.range_constexpr(vec_size):
+                        item_feature = feature + item * _NUM_THREADS
+                        item_idx = state_idx + item * _NUM_THREADS
+                        if item_feature < dim:
+                            partial += (
+                                Float32(mStates[item_idx]) * dstates[item] * scale
+                            )
                     total = row_reduce(
                         partial,
                         cute.ReductionOp.ADD,
@@ -348,8 +361,13 @@ def _compile_state_passing_bwd(
                             (Int64(batch_idx) * nheads + head) * nchunks + chunk
                         ) * nblocks + feature_block
                         mDDecayPartial[partial_idx] = total
-                    if feature < dim:
-                        dstates = scale * dstates + Float32(mDOut[state_idx])
+                    for item in cutlass.range_constexpr(vec_size):
+                        item_feature = feature + item * _NUM_THREADS
+                        item_idx = state_idx + item * _NUM_THREADS
+                        if item_feature < dim:
+                            dstates[item] = scale * dstates[item] + Float32(
+                                mDOut[item_idx]
+                            )
 
             if const_expr(has_initial):
                 scale = cute.math.exp2(
@@ -364,8 +382,11 @@ def _compile_state_passing_bwd(
                     (Int64(batch_idx) * nchunks) * nheads + head
                 ) * dim + feature
                 partial = Float32(0.0)
-                if feature < dim:
-                    partial = Float32(mStates[state0_idx]) * dstates * scale
+                for item in cutlass.range_constexpr(vec_size):
+                    item_feature = feature + item * _NUM_THREADS
+                    item_idx = state0_idx + item * _NUM_THREADS
+                    if item_feature < dim:
+                        partial += Float32(mStates[item_idx]) * dstates[item] * scale
                 total = row_reduce(
                     partial,
                     cute.ReductionOp.ADD,
@@ -377,9 +398,14 @@ def _compile_state_passing_bwd(
                         (Int64(batch_idx) * nheads + head) * nchunks
                     ) * nblocks + feature_block
                     mDDecayPartial[partial_idx] = total
-                if feature < dim:
-                    dstates = scale * dstates + Float32(mDOut[state0_idx])
-                    mDInitial[outer_base + feature] = dstates_dtype(dstates)
+                for item in cutlass.range_constexpr(vec_size):
+                    item_feature = feature + item * _NUM_THREADS
+                    item_idx = state0_idx + item * _NUM_THREADS
+                    if item_feature < dim:
+                        dstates[item] = scale * dstates[item] + Float32(mDOut[item_idx])
+                        mDInitial[outer_base + item_feature] = dstates_dtype(
+                            dstates[item]
+                        )
             else:
                 if cute.arch.warp_idx() == 0 and cute.arch.lane_idx() == 0:
                     partial_idx = (
@@ -442,7 +468,8 @@ def state_passing_bwd_cute(
         if states_dtype is not None and states_dtype != states.dtype
         else None
     )
-    nblocks = (dim + _NUM_THREADS - 1) // _NUM_THREADS
+    vec_size = 1 if states.dtype == torch.float32 else 4
+    nblocks = (dim + _NUM_THREADS * vec_size - 1) // (_NUM_THREADS * vec_size)
     partial = torch.empty(
         batch, nheads, nchunks, nblocks, device=states.device, dtype=torch.float32
     )
@@ -456,6 +483,7 @@ def state_passing_bwd_cute(
         torch2cute_dtype_map[dstates_dtype],
         torch2cute_dtype_map[dstates_dtype] if converted is not None else None,
         torch2cute_dtype_map[seq_idx.dtype] if seq_idx is not None else None,
+        vec_size,
         has_final=dfinal_states is not None,
         has_initial=bool(has_initial_states),
         convert_states=converted is not None,
