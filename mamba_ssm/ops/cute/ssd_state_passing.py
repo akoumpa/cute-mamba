@@ -238,7 +238,7 @@ def _compile_state_passing_bwd(
             mDFinal: cute.Tensor | None,
             mSeqIdx: cute.Tensor | None,
             mDStates: cute.Tensor,
-            mDDecayPartial: cute.Tensor,
+            mDDecay: cute.Tensor,
             mDInitial: cute.Tensor | None,
             mStatesConverted: cute.Tensor | None,
             batch: Int32,
@@ -257,7 +257,7 @@ def _compile_state_passing_bwd(
                 mDFinal,
                 mSeqIdx,
                 mDStates,
-                mDDecayPartial,
+                mDDecay,
                 mDInitial,
                 mStatesConverted,
                 nchunks,
@@ -282,7 +282,7 @@ def _compile_state_passing_bwd(
             mDFinal: cute.Tensor | None,
             mSeqIdx: cute.Tensor | None,
             mDStates: cute.Tensor,
-            mDDecayPartial: cute.Tensor,
+            mDDecay: cute.Tensor,
             mDInitial: cute.Tensor | None,
             mStatesConverted: cute.Tensor | None,
             nchunks: Int32,
@@ -357,10 +357,10 @@ def _compile_state_passing_bwd(
                         reduction_buffer=reduction_buffer,
                     )
                     if cute.arch.warp_idx() == 0 and cute.arch.lane_idx() == 0:
-                        partial_idx = (
-                            (Int64(batch_idx) * nheads + head) * nchunks + chunk
-                        ) * nblocks + feature_block
-                        mDDecayPartial[partial_idx] = total
+                        decay_idx = (Int64(batch_idx) * nheads + head) * nchunks + chunk
+                        cute.arch.atomic_add(
+                            ptr=mDDecay.iterator + decay_idx, val=total
+                        )
                     for item in cutlass.range_constexpr(vec_size):
                         item_feature = feature + item * _NUM_THREADS
                         item_idx = state_idx + item * _NUM_THREADS
@@ -394,10 +394,8 @@ def _compile_state_passing_bwd(
                     reduction_buffer=reduction_buffer,
                 )
                 if cute.arch.warp_idx() == 0 and cute.arch.lane_idx() == 0:
-                    partial_idx = (
-                        (Int64(batch_idx) * nheads + head) * nchunks
-                    ) * nblocks + feature_block
-                    mDDecayPartial[partial_idx] = total
+                    decay_idx = (Int64(batch_idx) * nheads + head) * nchunks
+                    cute.arch.atomic_add(ptr=mDDecay.iterator + decay_idx, val=total)
                 for item in cutlass.range_constexpr(vec_size):
                     item_feature = feature + item * _NUM_THREADS
                     item_idx = state0_idx + item * _NUM_THREADS
@@ -406,12 +404,6 @@ def _compile_state_passing_bwd(
                         mDInitial[outer_base + item_feature] = dstates_dtype(
                             dstates[item]
                         )
-            else:
-                if cute.arch.warp_idx() == 0 and cute.arch.lane_idx() == 0:
-                    partial_idx = (
-                        (Int64(batch_idx) * nheads + head) * nchunks
-                    ) * nblocks + feature_block
-                    mDDecayPartial[partial_idx] = Float32(0.0)
 
     def fake(dtype):
         return (
@@ -469,9 +461,8 @@ def state_passing_bwd_cute(
         else None
     )
     vec_size = 1 if states.dtype == torch.float32 else 4
-    nblocks = (dim + _NUM_THREADS * vec_size - 1) // (_NUM_THREADS * vec_size)
-    partial = torch.empty(
-        batch, nheads, nchunks, nblocks, device=states.device, dtype=torch.float32
+    ddecay_fp32 = torch.zeros(
+        (batch, nheads, nchunks), device=states.device, dtype=torch.float32
     )
     compiled = _compile_state_passing_bwd(
         torch2cute_dtype_map[states.dtype],
@@ -496,7 +487,7 @@ def state_passing_bwd_cute(
         dfinal_states.view(-1) if dfinal_states is not None else None,
         seq_idx.view(-1) if seq_idx is not None else None,
         dstates.view(-1),
-        partial.view(-1),
+        ddecay_fp32.view(-1),
         dinitial.view(-1) if dinitial is not None else None,
         converted.view(-1) if converted is not None else None,
         batch,
@@ -506,7 +497,7 @@ def state_passing_bwd_cute(
         seq_idx.shape[1] if seq_idx is not None else 0,
         chunk_size if seq_idx is not None else 0,
     )
-    ddecay = partial.sum(dim=-1).to(dA_chunk_cumsum.dtype)
+    ddecay = ddecay_fp32.to(dA_chunk_cumsum.dtype)
     if states_dtype is not None and states_dtype == states.dtype:
         converted = states
     result = (dstates, ddecay, dinitial)
