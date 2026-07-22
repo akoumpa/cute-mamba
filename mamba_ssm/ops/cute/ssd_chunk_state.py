@@ -656,9 +656,9 @@ def _can_use_chunk_state_gemm(B, x, dt, dA_cumsum, seq_idx):
 
 
 @cache
-def _compile_chunk_state_pack(x_dtype, b_dtype, dt_dtype, da_dtype):
-    tile_size = 32
+def _compile_chunk_state_pack(x_dtype, b_dtype, dt_dtype, da_dtype, tile_size: int):
     items_per_thread = tile_size * tile_size // _NUM_THREADS
+    smem_size = tile_size * (tile_size + 1) * 2 + tile_size * 4
 
     class ChunkStatePackTiled:
         @cute.jit
@@ -706,7 +706,7 @@ def _compile_chunk_state_pack(x_dtype, b_dtype, dt_dtype, da_dtype):
             ).launch(
                 grid=[x_blocks + b_blocks, 1, 1],
                 block=[_NUM_THREADS, 1, 1],
-                smem=4096,
+                smem=smem_size,
                 stream=stream,
             )
 
@@ -861,25 +861,28 @@ def _chunk_state_fwd_gemm(B, x, dt, dA_cumsum, states):
     batch, seqlen, nheads, headdim = x.shape
     _, _, nchunks, chunk_size = dt.shape
     _, _, ngroups, dstate = B.shape
+    matrices = batch * nchunks * nheads
     x_gemm = torch.empty(
-        batch * nchunks * nheads,
+        matrices,
         headdim,
         chunk_size,
         device=x.device,
         dtype=x.dtype,
     )
     b_gemm = torch.empty(
-        batch * nchunks * nheads,
+        matrices,
         dstate,
         chunk_size,
         device=B.device,
         dtype=B.dtype,
     )
+    tile_size = 64 if matrices >= 128 and chunk_size >= 256 else 32
     compiled = _compile_chunk_state_pack(
         torch2cute_dtype_map[x.dtype],
         torch2cute_dtype_map[B.dtype],
         torch2cute_dtype_map[dt.dtype],
         torch2cute_dtype_map[dA_cumsum.dtype],
+        tile_size,
     )
     compiled(
         x.view(-1),
