@@ -321,11 +321,11 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/ssd_combined.py:chunk_scan_chunk_state_bwd_dx_cute",
     },
     "triton.ssd_combined.mamba_chunk_scan_combined": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_chunk_scan_combined_cute",
     },
     "triton.ssd_combined.mamba_chunk_scan": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_chunk_scan_cute",
     },
     "triton.ssd_combined.selective_scan_bwd": {

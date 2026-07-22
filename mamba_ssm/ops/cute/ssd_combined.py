@@ -12,6 +12,12 @@ from mamba_ssm.ops.cute.ssd_chunk_state import chunk_state_bwd_dx_cute, chunk_st
 from mamba_ssm.ops.cute.ssd_state_passing import state_passing_cute
 
 
+def _needs_backward(*tensors):
+    return torch.is_grad_enabled() and any(
+        tensor is not None and tensor.requires_grad for tensor in tensors
+    )
+
+
 def chunk_scan_chunk_state_bwd_dx_cute(
     x,
     dt,
@@ -108,6 +114,10 @@ def mamba_chunk_scan_cute(
     dt_bias=None,
     dt_softplus=False,
 ):
+    if not _needs_backward(x, dt, A, B, C, D, z, dt_bias):
+        from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan
+
+        return mamba_chunk_scan(x, dt, A, B, C, chunk_size, D, z, dt_bias, dt_softplus)
     return _mamba_chunk_scan_fwd_cute(
         x,
         dt,
@@ -141,7 +151,13 @@ def mamba_chunk_scan_combined_cute(
     return_varlen_states=False,
     state_dtype=None,
 ):
-    if seq_idx is not None or return_varlen_states or state_dtype is not None:
+    if (
+        seq_idx is not None
+        or cu_seqlens is not None
+        or return_varlen_states
+        or state_dtype is not None
+        or not _needs_backward(x, dt, A, B, C, D, z, dt_bias, initial_states)
+    ):
         from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
 
         return mamba_chunk_scan_combined(

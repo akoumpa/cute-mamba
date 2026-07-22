@@ -60,8 +60,13 @@ def benchmark_case(dtype, batch, seqlen, nheads, headdim, dstate, chunk_size):
     )
     times = {}
     for name, function in implementations:
-        function()
-        times[(name, "fwd")] = do_bench(function, warmup=20, rep=50)
+
+        def inference():
+            with torch.no_grad():
+                return function()
+
+        inference()
+        times[(name, "inference")] = do_bench(inference, warmup=20, rep=50)
 
         def fwd_bwd():
             output = function()
@@ -70,7 +75,7 @@ def benchmark_case(dtype, batch, seqlen, nheads, headdim, dstate, chunk_size):
         fwd_bwd()
         times[(name, "fwd_bwd")] = do_bench(fwd_bwd, warmup=20, rep=50)
 
-    for operation in ("fwd", "fwd_bwd"):
+    for operation in ("inference", "fwd_bwd"):
         cute_ms = times[("cute", operation)]
         triton_ms = times[("triton", operation)]
         print(

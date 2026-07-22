@@ -172,16 +172,62 @@ def test_mamba_chunk_scan_cute_matches_combined():
     batch, seqlen, nheads, ngroups = 1, 33, 2, 1
     headdim, dstate, chunk_size = 16, 24, 32
     args = (
-        torch.randn(batch, seqlen, nheads, headdim, device="cuda"),
-        torch.randn(batch, seqlen, nheads, device="cuda"),
-        -torch.rand(nheads, device="cuda"),
-        torch.randn(batch, seqlen, ngroups, dstate, device="cuda"),
-        torch.randn(batch, seqlen, ngroups, dstate, device="cuda"),
+        torch.randn(batch, seqlen, nheads, headdim, device="cuda", requires_grad=True),
+        torch.randn(batch, seqlen, nheads, device="cuda", requires_grad=True),
+        -torch.rand(nheads, device="cuda", requires_grad=True),
+        torch.randn(batch, seqlen, ngroups, dstate, device="cuda", requires_grad=True),
+        torch.randn(batch, seqlen, ngroups, dstate, device="cuda", requires_grad=True),
         chunk_size,
     )
     actual = mamba_chunk_scan_cute(*args, dt_softplus=True)
     expected = mamba_chunk_scan_combined_cute(*args, dt_softplus=True)
     torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("combined", [False, True])
+def test_mamba_chunk_scan_cute_inference_uses_exact_fallback(monkeypatch, combined):
+    from mamba_ssm.ops.cute.ssd_combined import (
+        mamba_chunk_scan_combined_cute,
+        mamba_chunk_scan_cute,
+    )
+
+    sentinel = object()
+    symbol = "mamba_chunk_scan_combined" if combined else "mamba_chunk_scan"
+    monkeypatch.setattr(
+        f"mamba_ssm.ops.triton.ssd_combined.{symbol}",
+        lambda *args, **kwargs: sentinel,
+    )
+    args = (
+        torch.randn(1, 8, 2, 4),
+        torch.randn(1, 8, 2),
+        torch.randn(2),
+        torch.randn(1, 8, 1, 4),
+        torch.randn(1, 8, 1, 4),
+        8,
+    )
+    function = mamba_chunk_scan_combined_cute if combined else mamba_chunk_scan_cute
+    with torch.no_grad():
+        assert function(*args) is sentinel
+
+
+def test_mamba_chunk_scan_combined_cute_varlen_metadata_fallback(monkeypatch):
+    from mamba_ssm.ops.cute.ssd_combined import mamba_chunk_scan_combined_cute
+
+    sentinel = object()
+    monkeypatch.setattr(
+        "mamba_ssm.ops.triton.ssd_combined.mamba_chunk_scan_combined",
+        lambda *args, **kwargs: sentinel,
+    )
+    args = (
+        torch.randn(1, 8, 2, 4, requires_grad=True),
+        torch.randn(1, 8, 2, requires_grad=True),
+        torch.randn(2, requires_grad=True),
+        torch.randn(1, 8, 1, 4, requires_grad=True),
+        torch.randn(1, 8, 1, 4, requires_grad=True),
+        8,
+    )
+    cu_seqlens = torch.tensor([0, 8], dtype=torch.int32)
+    assert mamba_chunk_scan_combined_cute(*args, cu_seqlens=cu_seqlens) is sentinel
 
 
 def test_selective_scan_bwd_cute():

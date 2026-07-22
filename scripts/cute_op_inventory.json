@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 50,
-    "promoted": 19
+    "present_unverified": 48,
+    "promoted": 21
   },
   "routes": [
     {
@@ -282,7 +282,7 @@
       "id": "triton.ssd_combined.mamba_chunk_scan_combined",
       "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_chunk_scan_combined_cute",
       "source": "mamba_ssm/ops/triton/ssd_combined.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "mamba_chunk_scan_combined"
     },
     {
@@ -290,7 +290,7 @@
       "id": "triton.ssd_combined.mamba_chunk_scan",
       "implementation": "mamba_ssm/ops/cute/ssd_combined.py:mamba_chunk_scan_cute",
       "source": "mamba_ssm/ops/triton/ssd_combined.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "mamba_chunk_scan"
     },
     {
