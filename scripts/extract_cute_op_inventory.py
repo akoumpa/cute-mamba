@@ -364,6 +364,26 @@ CUTE_ROUTES = {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:mamba3_siso_combined_cute",
     },
+    "tilelang.mamba3.mamba3_mimo_fwd.mamba_mimo_forward": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba_mimo_forward_cute",
+    },
+    "tilelang.mamba3.mamba3_mimo_fwd_varlen.mamba_mimo_forward_varlen": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba_mimo_forward_varlen_cute",
+    },
+    "tilelang.mamba3.mamba3_mimo_bwd.mamba_mimo_bwd_combined": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba_mimo_bwd_combined_cute",
+    },
+    "tilelang.mamba3.mamba3_mimo_bwd_varlen.mamba_mimo_bwd_combined_varlen": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba_mimo_bwd_combined_varlen_cute",
+    },
+    "tilelang.mamba3.mamba3_mimo.mamba3_mimo": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba3_mimo_cute",
+    },
     "triton.mamba3.mamba3_mimo_utils.bwd_dadt_fused_triton": {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dadt_fused_cute",

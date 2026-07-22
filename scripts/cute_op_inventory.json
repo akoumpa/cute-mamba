@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 11,
-    "present_unverified": 55,
+    "missing": 6,
+    "present_unverified": 60,
     "promoted": 3
   },
   "routes": [
@@ -512,41 +512,41 @@
     {
       "group": "mamba3",
       "id": "tilelang.mamba3.mamba3_mimo_fwd.mamba_mimo_forward",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba_mimo_forward_cute",
       "source": "mamba_ssm/ops/tilelang/mamba3/mamba3_mimo_fwd.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba_mimo_forward"
     },
     {
       "group": "mamba3",
       "id": "tilelang.mamba3.mamba3_mimo_fwd_varlen.mamba_mimo_forward_varlen",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba_mimo_forward_varlen_cute",
       "source": "mamba_ssm/ops/tilelang/mamba3/mamba3_mimo_fwd_varlen.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba_mimo_forward_varlen"
     },
     {
       "group": "mamba3",
       "id": "tilelang.mamba3.mamba3_mimo_bwd.mamba_mimo_bwd_combined",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba_mimo_bwd_combined_cute",
       "source": "mamba_ssm/ops/tilelang/mamba3/mamba3_mimo_bwd.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba_mimo_bwd_combined"
     },
     {
       "group": "mamba3",
       "id": "tilelang.mamba3.mamba3_mimo_bwd_varlen.mamba_mimo_bwd_combined_varlen",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba_mimo_bwd_combined_varlen_cute",
       "source": "mamba_ssm/ops/tilelang/mamba3/mamba3_mimo_bwd_varlen.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba_mimo_bwd_combined_varlen"
     },
     {
       "group": "mamba3",
       "id": "tilelang.mamba3.mamba3_mimo.mamba3_mimo",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_backend.py:mamba3_mimo_cute",
       "source": "mamba_ssm/ops/tilelang/mamba3/mamba3_mimo.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba3_mimo"
     },
     {
