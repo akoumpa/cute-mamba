@@ -17,7 +17,6 @@ from quack.cute_dsl_utils import torch2cute_dtype_map
 _LOG2E = 1.4426950408889634
 _LN2 = 0.6931471805599453
 _NUM_THREADS = 128
-_WARPS_PER_CTA = _NUM_THREADS // 32
 
 
 @cute.jit
@@ -48,9 +47,11 @@ def _compile_selective_state_update(
     has_state_batch_indices: bool,
     dt_softplus: bool,
 ):
+    num_threads = 256 if dstate == 128 else _NUM_THREADS
+    warps_per_cta = num_threads // 32
     lanes_per_feature = min(32, max(4, dstate // 4))
     features_per_warp = 32 // lanes_per_feature
-    features_per_cta = _WARPS_PER_CTA * features_per_warp
+    features_per_cta = warps_per_cta * features_per_warp
     items_per_lane = math.ceil(dstate / lanes_per_feature)
     reduction_offsets = tuple(1 << i for i in range(int(math.log2(lanes_per_feature))))
 
@@ -94,7 +95,7 @@ def _compile_selective_state_update(
                 state_batch_stride,
             ).launch(
                 grid=[cute.ceil_div(dim, features_per_cta), batch, nheads],
-                block=[_NUM_THREADS, 1, 1],
+                block=[num_threads, 1, 1],
                 smem=2 * dstate * 4,
                 stream=stream,
             )
