@@ -55,15 +55,11 @@ def bwd_dadt_fused_cute(dSSdA, SSdA, ddA_cs, ddA_cs_rev, dA_cs, dA_cs_rev, chunk
 
 def bwd_dtrap_ddt_cute(trap, dt, dfactor, dgamma_diag, chunk_size):
     del chunk_size
-    sigmoid = torch.sigmoid(trap.float())
-    next_sigmoid = F.pad(sigmoid[..., 1:], (0, 1))
-    next_dt = F.pad(dt.float()[..., 1:], (0, 1))
-    dgamma = dfactor.float() + dgamma_diag.float()
-    shifted_ddt = F.pad(((1 - next_sigmoid) * dfactor.float())[..., :-1], (1, 0))
-    shifted_dtrap = F.pad((-next_dt * dfactor.float())[..., :-1], (1, 0))
-    ddt = shifted_ddt + dgamma * sigmoid
-    dtrap = (shifted_dtrap + dgamma * dt.float()) * sigmoid * (1 - sigmoid)
-    return ddt.to(dt.dtype), dtrap.to(trap.dtype)
+    from mamba_ssm.ops.cute.mamba3.mamba3_siso_scalar_bwd import (
+        compute_shifted_scalar_grads_cute,
+    )
+
+    return compute_shifted_scalar_grads_cute(dfactor, dgamma_diag, dt, trap)
 
 
 def _sequence_ranges(cu_seqlens):

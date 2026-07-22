@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 60,
-    "promoted": 9
+    "present_unverified": 59,
+    "promoted": 10
   },
   "routes": [
     {
@@ -410,7 +410,7 @@
       "id": "triton.mamba3.mamba3_mimo_utils.bwd_dtrap_ddt_triton",
       "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dtrap_ddt_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_utils.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "bwd_dtrap_ddt_triton"
     },
     {

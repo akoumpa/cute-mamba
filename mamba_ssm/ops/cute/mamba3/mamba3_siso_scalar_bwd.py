@@ -15,7 +15,9 @@ _NUM_THREADS = 256
 
 
 @cache
-def _compile_ddt_dtrap(dscale_dtype, dgamma_dtype, dt_dtype, trap_dtype):
+def _compile_ddt_dtrap(
+    dscale_dtype, dgamma_dtype, dt_dtype, trap_dtype, ddt_dtype, dtrap_dtype
+):
     class ComputeDdtDtrap:
         @cute.jit
         def __call__(
@@ -62,10 +64,10 @@ def _compile_ddt_dtrap(dscale_dtype, dgamma_dtype, dt_dtype, trap_dtype):
                 if index % seqlen != 0:
                     dscale_prev = Float32(mDscale[index - 1])
                 combined = dgamma + dscale
-                mDdt[index] = Float32(
+                mDdt[index] = ddt_dtype(
                     combined * trap + dscale_prev * (Float32(1.0) - trap)
                 )
-                mDtrap[index] = Float32(
+                mDtrap[index] = dtrap_dtype(
                     (combined - dscale_prev) * dt * trap * (Float32(1.0) - trap)
                 )
 
@@ -80,8 +82,8 @@ def _compile_ddt_dtrap(dscale_dtype, dgamma_dtype, dt_dtype, trap_dtype):
         fake(dgamma_dtype),
         fake(dt_dtype),
         fake(trap_dtype),
-        fake(Float32),
-        fake(Float32),
+        fake(ddt_dtype),
+        fake(dtrap_dtype),
         Int64(0),
         Int32(0),
         cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
@@ -89,7 +91,9 @@ def _compile_ddt_dtrap(dscale_dtype, dgamma_dtype, dt_dtype, trap_dtype):
     )
 
 
-def compute_ddt_dtrap_cute(dscale, dgamma, dt, trap):
+def compute_shifted_scalar_grads_cute(
+    dscale, dgamma, dt, trap, *, output_float32=False
+):
     if dgamma.shape != dscale.shape or dt.shape != dscale.shape:
         raise AssertionError("dscale, dgamma, and dt must have identical shapes")
     if trap.shape != dscale.shape or dscale.ndim != 3:
@@ -98,13 +102,17 @@ def compute_ddt_dtrap_cute(dscale, dgamma, dt, trap):
     if any(not tensor.is_cuda for tensor in tensors):
         raise AssertionError("Mamba3 scalar backward tensors must be CUDA tensors")
     dscale, dgamma, dt, trap = tensors
-    ddt = torch.empty(dscale.shape, dtype=torch.float32, device=dscale.device)
-    dtrap = torch.empty_like(ddt)
+    ddt_dtype = torch.float32 if output_float32 else dt.dtype
+    dtrap_dtype = torch.float32 if output_float32 else trap.dtype
+    ddt = torch.empty(dscale.shape, dtype=ddt_dtype, device=dscale.device)
+    dtrap = torch.empty(dscale.shape, dtype=dtrap_dtype, device=dscale.device)
     compiled = _compile_ddt_dtrap(
         torch2cute_dtype_map[dscale.dtype],
         torch2cute_dtype_map[dgamma.dtype],
         torch2cute_dtype_map[dt.dtype],
         torch2cute_dtype_map[trap.dtype],
+        torch2cute_dtype_map[ddt_dtype],
+        torch2cute_dtype_map[dtrap_dtype],
     )
     compiled(
         dscale.view(-1),
@@ -119,4 +127,10 @@ def compute_ddt_dtrap_cute(dscale, dgamma, dt, trap):
     return ddt, dtrap
 
 
-__all__ = ["compute_ddt_dtrap_cute"]
+def compute_ddt_dtrap_cute(dscale, dgamma, dt, trap):
+    return compute_shifted_scalar_grads_cute(
+        dscale, dgamma, dt, trap, output_float32=True
+    )
+
+
+__all__ = ["compute_ddt_dtrap_cute", "compute_shifted_scalar_grads_cute"]
