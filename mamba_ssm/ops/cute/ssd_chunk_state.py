@@ -278,8 +278,6 @@ def _compile_chunk_cumsum_bwd(
             mA: cute.Tensor,
             mBias: cute.Tensor | None,
             mDDt: cute.Tensor,
-            mDAPartial: cute.Tensor,
-            mDBiasPartial: cute.Tensor | None,
             mDA: cute.Tensor,
             mDBias: cute.Tensor | None,
             batch: Int32,
@@ -297,8 +295,8 @@ def _compile_chunk_cumsum_bwd(
                 mA,
                 mBias,
                 mDDt,
-                mDAPartial,
-                mDBiasPartial,
+                mDA,
+                mDBias,
                 seqlen,
                 nheads,
                 nchunks,
@@ -307,13 +305,7 @@ def _compile_chunk_cumsum_bwd(
             ).launch(
                 grid=[batch, nchunks, cute.ceil_div(nheads, _NUM_WARPS)],
                 block=[_NUM_THREADS, 1, 1],
-                stream=stream,
-            )
-            self.finalize_kernel(
-                mDAPartial, mDBiasPartial, mDA, mDBias, batch * nchunks, nheads
-            ).launch(
-                grid=[cute.ceil_div(nheads, _NUM_THREADS), 1, 1],
-                block=[_NUM_THREADS, 1, 1],
+                smem=2 * _NUM_WARPS * chunk_size * 4,
                 stream=stream,
             )
 
@@ -326,8 +318,8 @@ def _compile_chunk_cumsum_bwd(
             mA: cute.Tensor,
             mBias: cute.Tensor | None,
             mDDt: cute.Tensor,
-            mDAPartial: cute.Tensor,
-            mDBiasPartial: cute.Tensor | None,
+            mDA: cute.Tensor,
+            mDBias: cute.Tensor | None,
             seqlen: Int32,
             nheads: Int32,
             nchunks: Int32,
@@ -339,11 +331,32 @@ def _compile_chunk_cumsum_bwd(
             lane = tidx % 32
             warp = tidx // 32
             head = head_block * _NUM_WARPS + warp
+            smem = cutlass.utils.SmemAllocator()
+            smem_layout = cute.make_ordered_layout(
+                (_NUM_WARPS, chunk_size), order=(1, 0)
+            )
+            sDt = smem.allocate_tensor(Float32, smem_layout, byte_alignment=16)
+            sDDt = smem.allocate_tensor(Float32, smem_layout, byte_alignment=16)
+            for item in cutlass.range_constexpr(items_per_lane):
+                linear = tidx + item * _NUM_THREADS
+                pos = linear // _NUM_WARPS
+                local_head = linear - pos * _NUM_WARPS
+                load_head = head_block * _NUM_WARPS + local_head
+                token = chunk * chunk_size + pos
+                dt = Float32(0.0)
+                if pos < chunk_size and load_head < nheads and token < seqlen:
+                    dt_idx = (Int64(batch_idx) * seqlen + token) * nheads + load_head
+                    dt = Float32(mDt[dt_idx])
+                    if const_expr(has_bias):
+                        dt += Float32(mBias[load_head])
+                if pos < chunk_size:
+                    sDt[local_head, pos] = dt
+            cute.arch.sync_threads()
+
             dA_sum = Float32(0.0)
             dbias_sum = Float32(0.0)
             if head < nheads:
                 a = Float32(mA[head])
-                bias = Float32(mBias[head]) if const_expr(has_bias) else Float32(0.0)
                 for item in cutlass.range_constexpr(items_per_lane):
                     pos = item * 32 + lane
                     token = chunk * chunk_size + pos
@@ -351,10 +364,9 @@ def _compile_chunk_cumsum_bwd(
                         chunk_idx = (
                             (Int64(batch_idx) * nheads + head) * nchunks + chunk
                         ) * chunk_size + pos
-                        dt_idx = (Int64(batch_idx) * seqlen + token) * nheads + head
                         ddA = Float32(mDDA[chunk_idx])
                         ddt = ddA * a + Float32(mDDtOut[chunk_idx])
-                        dt = Float32(mDt[dt_idx]) + bias
+                        dt = sDt[warp, pos]
                         dt_pre_softplus = dt
                         if const_expr(dt_softplus):
                             dt = _softplus(dt)
@@ -367,43 +379,28 @@ def _compile_chunk_cumsum_bwd(
                         if const_expr(dt_softplus):
                             if dt_pre_softplus <= Float32(20.0):
                                 ddt *= sigmoid(dt_pre_softplus)
-                        mDDt[dt_idx] = dt_dtype(ddt)
+                        sDDt[warp, pos] = ddt
                         dA_sum += ddA * dt
                         dbias_sum += ddt
+
+            cute.arch.sync_threads()
+            for item in cutlass.range_constexpr(items_per_lane):
+                linear = tidx + item * _NUM_THREADS
+                pos = linear // _NUM_WARPS
+                local_head = linear - pos * _NUM_WARPS
+                store_head = head_block * _NUM_WARPS + local_head
+                token = chunk * chunk_size + pos
+                if pos < chunk_size and store_head < nheads and token < seqlen:
+                    ddt_idx = (Int64(batch_idx) * seqlen + token) * nheads + store_head
+                    mDDt[ddt_idx] = dt_dtype(sDDt[local_head, pos])
 
             for offset in (16, 8, 4, 2, 1):
                 dA_sum += cute.arch.shuffle_sync_down(dA_sum, offset)
                 dbias_sum += cute.arch.shuffle_sync_down(dbias_sum, offset)
             if lane == 0 and head < nheads:
-                partial_idx = (Int64(batch_idx) * nchunks + chunk) * nheads + head
-                mDAPartial[partial_idx] = dA_sum
+                cute.arch.atomic_add(ptr=mDA.iterator + head, val=dA_sum)
                 if const_expr(has_bias):
-                    mDBiasPartial[partial_idx] = dbias_sum
-
-        @cute.kernel
-        def finalize_kernel(
-            self,
-            mDAPartial: cute.Tensor,
-            mDBiasPartial: cute.Tensor | None,
-            mDA: cute.Tensor,
-            mDBias: cute.Tensor | None,
-            outer: Int32,
-            nheads: Int32,
-        ):
-            tidx, _, _ = cute.arch.thread_idx()
-            block, _, _ = cute.arch.block_idx()
-            head = block * _NUM_THREADS + tidx
-            if head < nheads:
-                dA = Float32(0.0)
-                dbias = Float32(0.0)
-                for idx in cutlass.range(0, outer, 1, unroll=1):
-                    partial_idx = Int64(idx) * nheads + head
-                    dA += Float32(mDAPartial[partial_idx])
-                    if const_expr(has_bias):
-                        dbias += Float32(mDBiasPartial[partial_idx])
-                mDA[head] = dA
-                if const_expr(has_bias):
-                    mDBias[head] = dbias
+                    cute.arch.atomic_add(ptr=mDBias.iterator + head, val=dbias_sum)
 
     def fake(dtype):
         return (
@@ -422,8 +419,6 @@ def _compile_chunk_cumsum_bwd(
         fake(a_dtype),
         fake(bias_dtype) if has_bias else None,
         fake(dt_dtype),
-        fake(Float32),
-        fake(Float32) if has_bias else None,
         fake(Float32),
         fake(Float32) if has_bias else None,
         Int32(0),
@@ -462,12 +457,9 @@ def chunk_cumsum_bwd_cute(
         )
     if ddt is None:
         ddt = torch.empty_like(dt)
-    outer = batch * nchunks
-    dA_partial = torch.empty(outer, nheads, device=dt.device, dtype=torch.float32)
-    dbias_partial = torch.empty_like(dA_partial) if dt_bias is not None else None
-    dA = torch.empty_like(A, dtype=torch.float32)
+    dA = torch.zeros_like(A, dtype=torch.float32)
     dbias = (
-        torch.empty_like(dt_bias, dtype=torch.float32) if dt_bias is not None else None
+        torch.zeros_like(dt_bias, dtype=torch.float32) if dt_bias is not None else None
     )
     compiled = _compile_chunk_cumsum_bwd(
         torch2cute_dtype_map[ddA.dtype],
@@ -486,8 +478,6 @@ def chunk_cumsum_bwd_cute(
         A.view(-1),
         dt_bias.view(-1) if dt_bias is not None else None,
         ddt.view(-1),
-        dA_partial.view(-1),
-        dbias_partial.view(-1) if dbias_partial is not None else None,
         dA.view(-1),
         dbias.view(-1) if dbias is not None else None,
         batch,
