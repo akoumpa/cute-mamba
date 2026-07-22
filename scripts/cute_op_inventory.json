@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 61,
-    "promoted": 8
+    "present_unverified": 60,
+    "promoted": 9
   },
   "routes": [
     {
@@ -490,7 +490,7 @@
       "id": "triton.mamba3.mamba3_siso_bwd.apply_dk_state_post",
       "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:apply_dk_state_post_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "apply_dk_state_post"
     },
     {

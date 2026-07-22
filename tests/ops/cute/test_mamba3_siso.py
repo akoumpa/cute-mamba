@@ -82,6 +82,35 @@ def test_compute_ddt_dtrap_cute(dtype):
             )
 
 
+@pytest.mark.parametrize("varlen", [False, True])
+def test_apply_dk_state_post_cute(varlen):
+    _require_cuda()
+    from mamba_ssm.ops.cute.mamba3.mamba3_siso import apply_dk_state_post_cute
+    from mamba_ssm.ops.triton.mamba3.mamba3_siso_bwd import apply_dk_state_post
+
+    torch.manual_seed(13)
+    batch, seqlen, nheads_qk, nheads, qk_dim, angle_dim = 2, 71, 2, 4, 32, 8
+    cu_seqlens = None
+    num_sequences = batch
+    if varlen:
+        batch, seqlen, num_sequences = 1, 113, 2
+        cu_seqlens = torch.tensor([0, 42, 113], device="cuda", dtype=torch.int32)
+    state = torch.randn(num_sequences, nheads, qk_dim, device="cuda")
+    angles = torch.randn(batch, seqlen, nheads, angle_dim, device="cuda")
+    k = torch.randn(batch, seqlen, nheads_qk, qk_dim, device="cuda")
+    k_bias = torch.randn(nheads, qk_dim, device="cuda")
+    outputs = (
+        torch.zeros_like(k),
+        torch.zeros_like(k_bias),
+        torch.zeros_like(angles),
+    )
+    expected = tuple(tensor.clone() for tensor in outputs)
+    apply_dk_state_post_cute(state, angles, k, k_bias, *outputs, cu_seqlens)
+    apply_dk_state_post(state, angles, k, k_bias, *expected, cu_seqlens)
+    for actual_tensor, expected_tensor in zip(outputs, expected):
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=2e-3, atol=3e-3)
+
+
 @pytest.mark.parametrize("qk_dim,v_dim,angle_dim", [(32, 16, 8), (128, 64, 32)])
 @pytest.mark.parametrize("with_optional", [False, True])
 def test_mamba3_siso_step_cute(with_optional, qk_dim, v_dim, angle_dim):

@@ -2,11 +2,13 @@ import torch
 import triton
 
 from mamba_ssm.ops.cute.mamba3.mamba3_siso import (
+    apply_dk_state_post_cute,
     compute_ddt_dtrap_dinput_states_cute,
     compute_dzdo_cute,
     mamba3_siso_step_cute,
 )
 from mamba_ssm.ops.triton.mamba3.mamba3_siso_bwd import (
+    apply_dk_state_post,
     compute_ddt_dtrap_dinput_states,
     compute_dzdo,
 )
@@ -72,7 +74,33 @@ def benchmark_ddt_dtrap():
         )
 
 
+def benchmark_dk_state_post():
+    seqlen, nheads_qk, nheads, qk_dim, angle_dim = 128, 2, 16, 128, 32
+    for batch in (1, 8, 32):
+        state = torch.randn(batch, nheads, qk_dim, device="cuda")
+        angles = torch.randn(batch, seqlen, nheads, angle_dim, device="cuda")
+        k = torch.randn(batch, seqlen, nheads_qk, qk_dim, device="cuda")
+        k_bias = torch.randn(nheads, qk_dim, device="cuda")
+        outputs = (
+            torch.zeros_like(k),
+            torch.zeros_like(k_bias),
+            torch.zeros_like(angles),
+        )
+        expected = tuple(tensor.clone() for tensor in outputs)
+        cute_ms = bench(
+            lambda: apply_dk_state_post_cute(state, angles, k, k_bias, *outputs)
+        )
+        triton_ms = bench(
+            lambda: apply_dk_state_post(state, angles, k, k_bias, *expected)
+        )
+        print(
+            f"dk_state_post batch={batch}: cute={cute_ms:.4f} ms "
+            f"triton={triton_ms:.4f} ms speedup={triton_ms / cute_ms:.3f}x"
+        )
+
+
 if __name__ == "__main__":
     benchmark_dzdo()
     benchmark_ddt_dtrap()
+    benchmark_dk_state_post()
     benchmark_step()

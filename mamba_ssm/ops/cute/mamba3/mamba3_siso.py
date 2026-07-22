@@ -579,9 +579,11 @@ def apply_dk_state_post_cute(
     dangles: torch.Tensor,
     Cu_Seqlens: Optional[torch.Tensor] = None,
 ):
-    from mamba_ssm.ops.triton.mamba3.mamba3_siso_bwd import apply_dk_state_post
+    from mamba_ssm.ops.cute.mamba3.mamba3_siso_state_post import (
+        apply_dk_state_post_cute_impl,
+    )
 
-    return apply_dk_state_post(
+    return apply_dk_state_post_cute_impl(
         d_ok_state, angles, k, k_bias, dk, dk_bias, dangles, Cu_Seqlens
     )
 
