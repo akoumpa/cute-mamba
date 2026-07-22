@@ -1,7 +1,7 @@
 {
   "counts": {
-    "missing": 19,
-    "present_unverified": 47,
+    "missing": 11,
+    "present_unverified": 55,
     "promoted": 3
   },
   "routes": [
@@ -448,65 +448,65 @@
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_siso_fwd.mamba3_siso_fwd",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:mamba3_siso_fwd_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_fwd.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba3_siso_fwd"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_siso_step.mamba3_siso_step",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:mamba3_siso_step_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_step.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba3_siso_step"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_siso_bwd.compute_dzdo",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_dzdo_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "compute_dzdo"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_siso_bwd.compute_dqkv",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_dqkv_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "compute_dqkv"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_siso_bwd.compute_dqktheta",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_dqktheta_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "compute_dqktheta"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_siso_bwd.apply_dk_state_post",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:apply_dk_state_post_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "apply_dk_state_post"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_siso_bwd.compute_ddt_dtrap_dinput_states",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_ddt_dtrap_dinput_states_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "compute_ddt_dtrap_dinput_states"
     },
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_siso_combined.mamba3_siso_combined",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:mamba3_siso_combined_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_combined.py",
-      "status": "missing",
+      "status": "present_unverified",
       "symbol": "mamba3_siso_combined"
     },
     {

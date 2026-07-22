@@ -332,6 +332,38 @@ CUTE_ROUTES = {
         "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_rotary_step.py:apply_rotary_qk_inference_fwd_cute",
     },
+    "triton.mamba3.mamba3_siso_fwd.mamba3_siso_fwd": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:mamba3_siso_fwd_cute",
+    },
+    "triton.mamba3.mamba3_siso_step.mamba3_siso_step": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:mamba3_siso_step_cute",
+    },
+    "triton.mamba3.mamba3_siso_bwd.compute_dzdo": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_dzdo_cute",
+    },
+    "triton.mamba3.mamba3_siso_bwd.compute_dqkv": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_dqkv_cute",
+    },
+    "triton.mamba3.mamba3_siso_bwd.compute_dqktheta": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_dqktheta_cute",
+    },
+    "triton.mamba3.mamba3_siso_bwd.apply_dk_state_post": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:apply_dk_state_post_cute",
+    },
+    "triton.mamba3.mamba3_siso_bwd.compute_ddt_dtrap_dinput_states": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:compute_ddt_dtrap_dinput_states_cute",
+    },
+    "triton.mamba3.mamba3_siso_combined.mamba3_siso_combined": {
+        "status": "present_unverified",
+        "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:mamba3_siso_combined_cute",
+    },
     "triton.mamba3.mamba3_mimo_utils.bwd_dadt_fused_triton": {
         "status": "present_unverified",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_utils.py:bwd_dadt_fused_cute",
