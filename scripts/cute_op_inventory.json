@@ -1,8 +1,8 @@
 {
   "counts": {
-    "missing": 26,
+    "missing": 25,
     "present_unverified": 41,
-    "promoted": 2
+    "promoted": 3
   },
   "routes": [
     {
@@ -392,9 +392,9 @@
     {
       "group": "mamba3",
       "id": "triton.mamba3.mamba3_mimo_rotary_step.apply_rotary_qk_inference_fwd",
-      "implementation": null,
+      "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_mimo_rotary_step.py:apply_rotary_qk_inference_fwd_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_mimo_rotary_step.py",
-      "status": "missing",
+      "status": "promoted",
       "symbol": "apply_rotary_qk_inference_fwd"
     },
     {

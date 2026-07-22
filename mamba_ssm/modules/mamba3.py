@@ -1,7 +1,7 @@
 # Copyright (c) 2026, Dao AI Lab, Goombalab.
 
 import math
-from einops import rearrange, repeat
+from einops import rearrange
 
 import torch
 import torch.nn as nn
@@ -22,6 +22,9 @@ from mamba_ssm.ops.cute.runtime import is_cute_dsl_available
 try:
     if not is_cute_dsl_available():
         raise ImportError("CuTe DSL is unavailable")
+    from mamba_ssm.ops.cute.mamba3.mamba3_mimo_rotary_step import (
+        apply_rotary_qk_inference_fwd_cute as apply_rotary_qk_inference_fwd,
+    )
     from mamba_ssm.ops.cute.mamba3.mamba3_step_fn import mamba3_step_fn
 except (ImportError, FileNotFoundError, OSError):
     mamba3_step_fn = None
