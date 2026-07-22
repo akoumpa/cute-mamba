@@ -95,6 +95,7 @@ def _compile_selective_state_update(
             ).launch(
                 grid=[cute.ceil_div(dim, features_per_cta), batch, nheads],
                 block=[_NUM_THREADS, 1, 1],
+                smem=2 * dstate * 4,
                 stream=stream,
             )
 
@@ -123,7 +124,24 @@ def _compile_selective_state_update(
             warp = tidx // 32
             feature_group = lane // lanes_per_feature
             state_lane = lane % lanes_per_feature
-            feature = block_d * features_per_cta + warp * features_per_warp + feature_group
+            feature = (
+                block_d * features_per_cta + warp * features_per_warp + feature_group
+            )
+            group = head // (nheads // ngroups)
+            bc_base = (Int64(batch_idx) * ngroups + group) * dstate
+
+            smem = cutlass.utils.SmemAllocator()
+            sB = smem.allocate_tensor(
+                Float32, cute.make_layout((dstate,)), byte_alignment=16
+            )
+            sC = smem.allocate_tensor(
+                Float32, cute.make_layout((dstate,)), byte_alignment=16
+            )
+            if const_expr(dstate >= 64):
+                if tidx < dstate:
+                    sB[tidx] = Float32(mB[bc_base + tidx])
+                    sC[tidx] = Float32(mC[bc_base + tidx])
+                cute.arch.sync_threads()
 
             if feature < dim:
                 state_batch = Int32(batch_idx)
@@ -136,9 +154,10 @@ def _compile_selective_state_update(
                 else:
                     token_idx = (Int64(batch_idx) * nheads + head) * dim + feature
                     param_idx = Int64(head) * dim + feature
-                    group = head // (nheads // ngroups)
-                    bc_base = (Int64(batch_idx) * ngroups + group) * dstate
-                    state_base = Int64(state_batch) * state_batch_stride + (Int64(head) * dim + feature) * dstate
+                    state_base = (
+                        Int64(state_batch) * state_batch_stride
+                        + (Int64(head) * dim + feature) * dstate
+                    )
 
                     x = Float32(0.0)
                     dt = Float32(0.0)
@@ -160,9 +179,15 @@ def _compile_selective_state_update(
                             state_idx = state_base + state_col
                             state = Float32(mState[state_idx])
                             a = Float32(mA[param_idx * dstate + state_col])
-                            b = Float32(mB[bc_base + state_col])
-                            c = Float32(mC[bc_base + state_col])
-                            decay = cute.math.exp2(a * dt * Float32(_LOG2E), fastmath=True)
+                            if const_expr(dstate >= 64):
+                                b = sB[state_col]
+                                c = sC[state_col]
+                            else:
+                                b = Float32(mB[bc_base + state_col])
+                                c = Float32(mC[bc_base + state_col])
+                            decay = cute.math.exp2(
+                                a * dt * Float32(_LOG2E), fastmath=True
+                            )
                             state = state * decay + b * dt * x
                             mState[state_idx] = state_dtype(state)
                             output += state * c
@@ -176,11 +201,15 @@ def _compile_selective_state_update(
                             output *= silu(Float32(mZ[token_idx]))
                         mOut[token_idx] = x_dtype(output)
 
-    fake = lambda dtype, align=16: (
-        cute.runtime.make_fake_tensor(dtype, (cute.sym_int(),), stride=(1,), assumed_align=align)
-        if dtype is not None
-        else None
-    )
+    def fake(dtype, align=16):
+        return (
+            cute.runtime.make_fake_tensor(
+                dtype, (cute.sym_int(),), stride=(1,), assumed_align=align
+            )
+            if dtype is not None
+            else None
+        )
+
     return cute.compile(
         SelectiveStateUpdate(),
         fake(state_dtype),
@@ -240,7 +269,9 @@ def selective_state_update_cute(
 
     _, nheads, dim, dstate = state.shape
     if dstate not in (16, 32, 64, 128):
-        raise ValueError("CuTe selective_state_update supports dstate 16, 32, 64, or 128")
+        raise ValueError(
+            "CuTe selective_state_update supports dstate 16, 32, 64, or 128"
+        )
     batch = x.shape[0]
     ngroups = B.shape[1]
     assert x.shape == (batch, nheads, dim)
@@ -271,7 +302,9 @@ def selective_state_update_cute(
         torch2cute_dtype_map[D.dtype] if D is not None else None,
         torch2cute_dtype_map[z.dtype] if z is not None else None,
         torch2cute_dtype_map[dt_bias.dtype] if dt_bias is not None else None,
-        torch2cute_dtype_map[state_batch_indices.dtype] if state_batch_indices is not None else None,
+        torch2cute_dtype_map[state_batch_indices.dtype]
+        if state_batch_indices is not None
+        else None,
         dstate,
         has_d=D is not None,
         has_z=z is not None,
