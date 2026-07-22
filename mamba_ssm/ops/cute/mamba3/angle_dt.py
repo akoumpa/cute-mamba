@@ -35,12 +35,13 @@ def _compile_angle_dt_fwd_chunked(
     index_dtype,
     chunk_size: int,
     dim: int,
+    subgroup_size: int,
     *,
     has_initial: bool,
     return_state: bool,
     is_varlen: bool,
 ):
-    subgroup_size = 8
+    scan_offsets = (1, 2) if subgroup_size == 4 else (1, 2, 4)
     features_per_warp = 32 // subgroup_size
     num_warps = dim // features_per_warp
     num_threads = num_warps * 32
@@ -173,7 +174,7 @@ def _compile_angle_dt_fwd_chunked(
                 for item in cutlass.range_constexpr(scan_items):
                     pos = item * subgroup_size + token_lane
                     value = sValues[pos, feature] * sDt[pos]
-                    for offset in (1, 2, 4):
+                    for offset in scan_offsets:
                         addend = cute.arch.shuffle_sync_up(
                             value, offset, mask_and_clamp=0
                         )
@@ -413,6 +414,11 @@ def angle_dt_fwd_cute(
             torch2cute_dtype_map[cu_seqlens.dtype] if is_varlen else None,
             chunk_size,
             dim,
+            4
+            if not is_varlen
+            and dim == 32
+            and angle.dtype in (torch.float16, torch.bfloat16)
+            else 8,
             has_initial=init_state is not None,
             return_state=return_output_state,
             is_varlen=is_varlen,
