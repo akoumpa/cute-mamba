@@ -205,7 +205,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/activations.py:_swiglu_bwd",
     },
     "triton.ssd_bmm._bmm_chunk_fwd": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/ssd_bmm.py:_bmm_chunk_fwd_cute",
     },
     "triton.ssd_bmm._bmm_chunk_bwd": {
