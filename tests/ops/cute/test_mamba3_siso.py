@@ -58,14 +58,15 @@ def test_compute_dzdo_cute(dtype):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)
 
 
+@pytest.mark.parametrize("qk_dim,v_dim,angle_dim", [(32, 16, 8), (128, 64, 32)])
 @pytest.mark.parametrize("with_optional", [False, True])
-def test_mamba3_siso_step_cute(with_optional):
+def test_mamba3_siso_step_cute(with_optional, qk_dim, v_dim, angle_dim):
     _require_cuda()
     from mamba_ssm.ops.cute.mamba3.mamba3_siso import mamba3_siso_step_cute
     from mamba_ssm.ops.triton.mamba3.mamba3_siso_step import mamba3_siso_step
 
     torch.manual_seed(11)
-    batch, nheads_qk, nheads, qk_dim, v_dim, angle_dim = 2, 2, 4, 32, 16, 8
+    batch, nheads_qk, nheads = 2, 2, 4
     q = torch.randn(batch, nheads_qk, qk_dim, device="cuda", dtype=torch.bfloat16)
     k = torch.randn_like(q)
     v = torch.randn(batch, nheads, v_dim, device="cuda", dtype=torch.bfloat16)
@@ -86,6 +87,7 @@ def test_mamba3_siso_step_cute(with_optional):
     args = (q, k, v, adt, dt, trap, q_bias, k_bias, angles, d, z, states)
     actual = mamba3_siso_step_cute(*args)
     expected = mamba3_siso_step(*args)
-    torch.testing.assert_close(actual[0], expected[0], rtol=3e-2, atol=5e-2)
+    output_atol = 1e-1 if qk_dim >= 128 else 5e-2
+    torch.testing.assert_close(actual[0], expected[0], rtol=3e-2, atol=output_atol)
     for actual_tensor, expected_tensor in zip(actual[1], expected[1]):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=3e-2, atol=5e-2)

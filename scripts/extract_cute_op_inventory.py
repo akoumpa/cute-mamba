@@ -361,7 +361,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:mamba3_siso_fwd_cute",
     },
     "triton.mamba3.mamba3_siso_step.mamba3_siso_step": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:mamba3_siso_step_cute",
     },
     "triton.mamba3.mamba3_siso_bwd.compute_dzdo": {

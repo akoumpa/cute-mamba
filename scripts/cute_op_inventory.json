@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 63,
-    "promoted": 6
+    "present_unverified": 62,
+    "promoted": 7
   },
   "routes": [
     {
@@ -458,7 +458,7 @@
       "id": "triton.mamba3.mamba3_siso_step.mamba3_siso_step",
       "implementation": "mamba_ssm/ops/cute/mamba3/mamba3_siso.py:mamba3_siso_step_cute",
       "source": "mamba_ssm/ops/triton/mamba3/mamba3_siso_step.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "mamba3_siso_step"
     },
     {
