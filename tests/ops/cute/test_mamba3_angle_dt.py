@@ -73,3 +73,22 @@ def test_angle_dt_bwd_cute(dtype, varlen):
     expected = angle_dt_bwd(grad_out, angle, dt, True, 16, grad_final, cu_seqlens)
     for actual_tensor, expected_tensor in zip(actual, expected):
         torch.testing.assert_close(actual_tensor, expected_tensor, rtol=4e-3, atol=8e-3)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_angle_dt_bwd_chunked_cute(dtype):
+    _require_cute()
+    from mamba_ssm.ops.cute.mamba3.angle_dt import angle_dt_bwd_cute
+    from mamba_ssm.ops.triton.mamba3.angle_dt import angle_dt_bwd
+
+    torch.manual_seed(3)
+    batch, seqlen, nheads, dim = 2, 128, 4, 32
+    angle = torch.randn(batch, seqlen, nheads, dim, device="cuda", dtype=dtype)
+    dt = torch.randn(batch, nheads, seqlen, device="cuda", dtype=dtype)
+    grad_out = torch.randn_like(angle)
+    grad_final = torch.randn(batch, nheads, dim, device="cuda", dtype=dtype)
+    actual = angle_dt_bwd_cute(grad_out, angle, dt, True, 64, grad_final)
+    expected = angle_dt_bwd(grad_out, angle, dt, True, 64, grad_final)
+    rtol, atol = (6e-3, 3e-2) if dtype == torch.bfloat16 else (4e-3, 8e-3)
+    for actual_tensor, expected_tensor in zip(actual, expected):
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=rtol, atol=atol)

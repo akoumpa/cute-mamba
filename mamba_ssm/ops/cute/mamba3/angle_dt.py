@@ -404,6 +404,191 @@ def angle_dt_fwd_cute(
 
 
 @cache
+def _compile_angle_dt_bwd_chunked(
+    angle_dtype,
+    dt_dtype,
+    grad_dtype,
+    final_dtype,
+    chunk_size: int,
+    dim: int,
+    *,
+    has_initial: bool,
+    has_grad_final: bool,
+):
+    subgroup_size = 8
+    features_per_warp = 32 // subgroup_size
+    num_warps = dim // features_per_warp
+    num_threads = num_warps * 32
+    items_per_thread = chunk_size * dim // num_threads
+    scan_items = chunk_size // subgroup_size
+    tokens_per_warp = chunk_size // num_warps
+
+    class AngleDtBwdChunked:
+        @cute.jit
+        def __call__(
+            self,
+            mGradOut: cute.Tensor,
+            mAngle: cute.Tensor,
+            mDt: cute.Tensor,
+            mGradFinal: cute.Tensor | None,
+            mGradAngle: cute.Tensor,
+            mGradDt: cute.Tensor,
+            mGradInitial: cute.Tensor | None,
+            batch: Int32,
+            seqlen: Int32,
+            nheads: Int32,
+            stream: cuda.CUstream,
+        ):
+            self.kernel(
+                mGradOut,
+                mAngle,
+                mDt,
+                mGradFinal,
+                mGradAngle,
+                mGradDt,
+                mGradInitial,
+                seqlen,
+                nheads,
+            ).launch(
+                grid=[batch, nheads, 1],
+                block=[num_threads, 1, 1],
+                smem=chunk_size * dim * 4 + chunk_size * 4,
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(
+            self,
+            mGradOut: cute.Tensor,
+            mAngle: cute.Tensor,
+            mDt: cute.Tensor,
+            mGradFinal: cute.Tensor | None,
+            mGradAngle: cute.Tensor,
+            mGradDt: cute.Tensor,
+            mGradInitial: cute.Tensor | None,
+            seqlen: Int32,
+            nheads: Int32,
+        ):
+            tidx, _, _ = cute.arch.thread_idx()
+            batch_idx, head, _ = cute.arch.block_idx()
+            lane = tidx % 32
+            warp = tidx // 32
+            feature_group = lane // subgroup_size
+            token_lane = lane % subgroup_size
+            feature = warp * features_per_warp + feature_group
+
+            smem = cutlass.utils.SmemAllocator()
+            sValues = smem.allocate_tensor(
+                Float32,
+                cute.make_ordered_layout((chunk_size, dim), order=(1, 0)),
+                byte_alignment=16,
+            )
+            sDt = smem.allocate_tensor(
+                Float32, cute.make_layout((chunk_size,)), byte_alignment=16
+            )
+
+            carry = Float32(0.0)
+            if const_expr(has_grad_final):
+                carry = Float32(
+                    mGradFinal[(Int64(batch_idx) * nheads + head) * dim + feature]
+                )
+
+            nchunks = seqlen // chunk_size
+            for reverse_chunk in cutlass.range(0, nchunks, 1, unroll=1):
+                chunk = nchunks - 1 - reverse_chunk
+                for item in cutlass.range_constexpr(items_per_thread):
+                    linear = tidx + item * num_threads
+                    pos = linear // dim
+                    load_feature = linear - pos * dim
+                    token = chunk * chunk_size + pos
+                    grad_idx = (
+                        (Int64(batch_idx) * seqlen + token) * nheads + head
+                    ) * dim + load_feature
+                    sValues[pos, load_feature] = Float32(mGradOut[grad_idx])
+                if tidx < chunk_size:
+                    token = chunk * chunk_size + tidx
+                    dt_idx = (Int64(batch_idx) * nheads + head) * seqlen + token
+                    sDt[tidx] = Float32(mDt[dt_idx])
+                cute.arch.sync_threads()
+
+                for reverse_item in cutlass.range_constexpr(scan_items):
+                    item = scan_items - 1 - reverse_item
+                    pos = item * subgroup_size + token_lane
+                    value = sValues[pos, feature]
+                    for offset in (1, 2, 4):
+                        addend = cute.arch.shuffle_sync_down(value, offset)
+                        if token_lane + offset < subgroup_size:
+                            value += addend
+                    value += carry
+                    sValues[pos, feature] = value
+                    carry = cute.arch.shuffle_sync(value, feature_group * subgroup_size)
+                cute.arch.sync_threads()
+
+                for item in cutlass.range_constexpr(items_per_thread):
+                    linear = tidx + item * num_threads
+                    pos = linear // dim
+                    item_feature = linear - pos * dim
+                    token = chunk * chunk_size + pos
+                    angle_idx = (
+                        (Int64(batch_idx) * seqlen + token) * nheads + head
+                    ) * dim + item_feature
+                    angle = Float32(mAngle[angle_idx])
+                    tanh_angle = tanh_approx(angle)
+                    grad_value = sValues[pos, item_feature]
+                    mGradAngle[angle_idx] = angle_dtype(
+                        grad_value
+                        * sDt[pos]
+                        * Float32(_PI)
+                        * (Float32(1.0) - tanh_angle * tanh_angle)
+                    )
+                    sValues[pos, item_feature] = grad_value * tanh_angle * Float32(_PI)
+                cute.arch.sync_threads()
+
+                for item in cutlass.range_constexpr(tokens_per_warp):
+                    pos = warp + item * num_warps
+                    value = Float32(0.0)
+                    if lane < dim:
+                        value = sValues[pos, lane]
+                    for offset in (16, 8, 4, 2, 1):
+                        value += cute.arch.shuffle_sync_down(value, offset)
+                    if lane == 0:
+                        token = chunk * chunk_size + pos
+                        dt_idx = (Int64(batch_idx) * nheads + head) * seqlen + token
+                        mGradDt[dt_idx] = dt_dtype(value)
+                cute.arch.sync_threads()
+
+            if const_expr(has_initial):
+                if token_lane == 0:
+                    initial_idx = (Int64(batch_idx) * nheads + head) * dim + feature
+                    mGradInitial[initial_idx] = carry
+
+    def fake(dtype):
+        return (
+            cute.runtime.make_fake_tensor(
+                dtype, (cute.sym_int(),), stride=(1,), assumed_align=16
+            )
+            if dtype is not None
+            else None
+        )
+
+    return cute.compile(
+        AngleDtBwdChunked(),
+        fake(grad_dtype),
+        fake(angle_dtype),
+        fake(dt_dtype),
+        fake(final_dtype) if has_grad_final else None,
+        fake(angle_dtype),
+        fake(dt_dtype),
+        fake(Float32) if has_initial else None,
+        Int32(0),
+        Int32(0),
+        Int32(0),
+        cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+        options="--enable-tvm-ffi",
+    )
+
+
+@cache
 def _compile_angle_dt_bwd(
     angle_dtype,
     dt_dtype,
@@ -593,7 +778,6 @@ def angle_dt_bwd_cute(
     grad_output_state=None,
     cu_seqlens=None,
 ):
-    del chunk_size
     batch, seqlen, nheads, dim = angle.shape
     if grad_out.shape != angle.shape or dt.shape != (batch, nheads, seqlen):
         raise ValueError("CuTe angle_dt backward input shapes do not match")
@@ -612,10 +796,6 @@ def angle_dt_bwd_cute(
         raise ValueError("CuTe angle_dt backward requires contiguous CUDA tensors")
 
     grad_angle = torch.empty_like(angle)
-    feature_blocks = (dim + _VEC_SIZE - 1) // _VEC_SIZE
-    grad_dt_partial = torch.empty(
-        batch, nheads, seqlen, feature_blocks, device=dt.device, dtype=torch.float32
-    )
     grad_dt = torch.empty_like(dt)
     grad_initial = (
         torch.empty(
@@ -623,6 +803,42 @@ def angle_dt_bwd_cute(
         )
         if has_init_state
         else None
+    )
+    if (
+        not is_varlen
+        and chunk_size == 64
+        and dim in (16, 32)
+        and seqlen % chunk_size == 0
+    ):
+        compiled = _compile_angle_dt_bwd_chunked(
+            torch2cute_dtype_map[angle.dtype],
+            torch2cute_dtype_map[dt.dtype],
+            torch2cute_dtype_map[grad_out.dtype],
+            torch2cute_dtype_map[grad_output_state.dtype]
+            if grad_output_state is not None
+            else None,
+            chunk_size,
+            dim,
+            has_initial=has_init_state,
+            has_grad_final=grad_output_state is not None,
+        )
+        compiled(
+            grad_out.view(-1),
+            angle.view(-1),
+            dt.view(-1),
+            grad_output_state.view(-1) if grad_output_state is not None else None,
+            grad_angle.view(-1),
+            grad_dt.view(-1),
+            grad_initial.view(-1) if grad_initial is not None else None,
+            batch,
+            seqlen,
+            nheads,
+        )
+        return grad_angle, grad_dt, grad_initial
+
+    feature_blocks = (dim + _VEC_SIZE - 1) // _VEC_SIZE
+    grad_dt_partial = torch.empty(
+        batch, nheads, seqlen, feature_blocks, device=dt.device, dtype=torch.float32
     )
     compiled = _compile_angle_dt_bwd(
         torch2cute_dtype_map[angle.dtype],
