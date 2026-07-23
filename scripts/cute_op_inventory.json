@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 41,
-    "promoted": 28
+    "present_unverified": 35,
+    "promoted": 34
   },
   "routes": [
     {
@@ -42,7 +42,7 @@
       "id": "triton.softplus.softplus",
       "implementation": "mamba_ssm/ops/cute/softplus.py:softplus",
       "source": "mamba_ssm/ops/triton/softplus.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "softplus"
     },
     {
@@ -330,7 +330,7 @@
       "id": "triton.mamba3.utils.cos_approx",
       "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:cos_approx",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "cos_approx"
     },
     {
@@ -338,7 +338,7 @@
       "id": "triton.mamba3.utils.sin_approx",
       "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:sin_approx",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "sin_approx"
     },
     {
@@ -346,7 +346,7 @@
       "id": "triton.mamba3.utils.tanh_approx",
       "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:tanh_approx",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "tanh_approx"
     },
     {
@@ -354,7 +354,7 @@
       "id": "triton.mamba3.utils.sech2_approx",
       "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:sech2_approx",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "sech2_approx"
     },
     {
@@ -370,7 +370,7 @@
       "id": "triton.mamba3.utils.silu",
       "implementation": "mamba_ssm/ops/cute/mamba3/utils.py:silu",
       "source": "mamba_ssm/ops/triton/mamba3/utils.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "silu"
     },
     {

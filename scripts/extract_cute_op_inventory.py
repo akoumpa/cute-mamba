@@ -193,7 +193,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/selective_scan.py:mamba_inner_cute",
     },
     "triton.softplus.softplus": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/softplus.py:softplus",
     },
     "triton.k_activations._swiglu_fwd": {
@@ -434,9 +434,7 @@ CUTE_ROUTES = {
     },
     **{
         f"triton.mamba3.utils.{symbol}": {
-            "status": "promoted"
-            if symbol == "sigmoid_approx"
-            else "present_unverified",
+            "status": "promoted",
             "implementation": f"mamba_ssm/ops/cute/mamba3/utils.py:{symbol}",
         }
         for symbol in (
