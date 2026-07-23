@@ -10,6 +10,7 @@ from mamba_ssm.ops.triton.k_activations import _swiglu_fwd as triton_fwd
 CASES = [
     (torch.bfloat16, 128, 128),
     (torch.bfloat16, 512, 256),
+    (torch.bfloat16, 1024, 256),
     (torch.bfloat16, 2048, 512),
     (torch.float16, 256, 1024),
     (torch.bfloat16, 2048, 2048),
