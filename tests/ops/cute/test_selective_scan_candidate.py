@@ -53,3 +53,37 @@ def test_selective_scan_candidate_forward_backward(variable_bc):
     expected_grads = torch.autograd.grad(expected, inputs, grad)
     for actual_grad, expected_grad in zip(actual_grads, expected_grads):
         torch.testing.assert_close(actual_grad, expected_grad)
+
+
+@pytest.mark.parametrize("bc_layout", ["constant", "batch", "grouped"])
+def test_selective_scan_candidate_bounded_inference(bc_layout):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required")
+    pytest.importorskip("cutlass.cute")
+    from mamba_ssm.ops.cute.selective_scan import selective_scan_cute
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_ref
+
+    torch.manual_seed(31)
+    batch, dim, seqlen, dstate = 2, 8, 4, 32
+    u = torch.randn(batch, dim, seqlen, device="cuda", dtype=torch.bfloat16)
+    delta = torch.randn_like(u)
+    a = -torch.rand(dim, dstate, device="cuda")
+    if bc_layout == "constant":
+        b = torch.randn(dim, dstate, device="cuda", dtype=torch.bfloat16)
+        c = torch.randn_like(b)
+    elif bc_layout == "batch":
+        b = torch.randn(batch, dstate, seqlen, device="cuda", dtype=torch.bfloat16)
+        c = torch.randn_like(b)
+    else:
+        b = torch.randn(batch, 2, dstate, seqlen, device="cuda", dtype=torch.bfloat16)
+        c = torch.randn_like(b)
+    d = torch.randn(dim, device="cuda")
+    z = torch.randn_like(u)
+    delta_bias = torch.randn(dim, device="cuda")
+    args = (u, delta, a, b, c, d, z, delta_bias, True, True)
+    with torch.no_grad():
+        actual, actual_last = selective_scan_cute(*args)
+        expected, expected_last = selective_scan_ref(*args)
+    torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
+    torch.testing.assert_close(actual_last, expected_last, rtol=2e-2, atol=2e-2)
+    assert not actual_last.requires_grad

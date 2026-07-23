@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 35,
-    "promoted": 34
+    "present_unverified": 34,
+    "promoted": 35
   },
   "routes": [
     {
@@ -10,7 +10,7 @@
       "id": "selective_scan_interface.selective_scan_fn",
       "implementation": "mamba_ssm/ops/cute/selective_scan.py:selective_scan_cute",
       "source": "mamba_ssm/ops/selective_scan_interface.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "selective_scan_fn"
     },
     {
