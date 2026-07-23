@@ -59,7 +59,7 @@ def test_swiglu_packed_forward_route():
     from mamba_ssm.ops.cute.activations import _swiglu_fwd
 
     torch.manual_seed(0)
-    xy = torch.randn((1024, 512), device="cuda", dtype=torch.bfloat16)
+    xy = torch.randn((8192, 8192), device="cuda", dtype=torch.bfloat16)
     x, y = xy.float().chunk(2, dim=-1)
 
     out = _swiglu_fwd(xy)

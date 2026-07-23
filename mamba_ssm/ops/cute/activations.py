@@ -21,7 +21,8 @@ _VALUES_PER_ITEM = 2
 
 @cache
 def _compile_swiglu_fwd(input_dtype, num_threads: int, pack_bf16: bool):
-    items_per_thread = _BLOCK_SIZE // (num_threads * _VALUES_PER_ITEM)
+    values_per_item = 4 if pack_bf16 else _VALUES_PER_ITEM
+    items_per_thread = _BLOCK_SIZE // (num_threads * values_per_item)
 
     class SwiGLUForward:
         @cute.jit
@@ -57,21 +58,33 @@ def _compile_swiglu_fwd(input_dtype, num_threads: int, pack_bf16: bool):
                 mXYPacked = cute.recast_tensor(mXY, Int32)
                 mOutPacked = cute.recast_tensor(mOut, Int32)
             for item in cutlass.range_constexpr(items_per_thread):
-                col = block_base + (tidx + item * num_threads) * _VALUES_PER_ITEM
+                col = block_base + (tidx + item * num_threads) * values_per_item
                 if col < ncols:
                     xy_offset = row_base + col
                     if cutlass.const_expr(pack_bf16):
                         x_raw, x_next_raw = i32_to_bf16x2(mXYPacked[xy_offset // 2])
+                        x2_raw, x3_raw = i32_to_bf16x2(mXYPacked[xy_offset // 2 + 1])
                         y_raw, y_next_raw = i32_to_bf16x2(
                             mXYPacked[(xy_offset + ncols) // 2]
                         )
+                        y2_raw, y3_raw = i32_to_bf16x2(
+                            mXYPacked[(xy_offset + ncols) // 2 + 1]
+                        )
                         packed_x0 = Float32(x_raw)
                         packed_x1 = Float32(x_next_raw)
+                        packed_x2 = Float32(x2_raw)
+                        packed_x3 = Float32(x3_raw)
                         packed_y0 = Float32(y_raw)
                         packed_y1 = Float32(y_next_raw)
+                        packed_y2 = Float32(y2_raw)
+                        packed_y3 = Float32(y3_raw)
                         mOutPacked[(out_base + col) // 2] = bf16x2_to_i32(
                             input_dtype(swiglu(packed_x0, packed_y0)),
                             input_dtype(swiglu(packed_x1, packed_y1)),
+                        )
+                        mOutPacked[(out_base + col) // 2 + 1] = bf16x2_to_i32(
+                            input_dtype(swiglu(packed_x2, packed_y2)),
+                            input_dtype(swiglu(packed_x3, packed_y3)),
                         )
                     else:
                         x = Float32(mXY[xy_offset])
@@ -259,11 +272,15 @@ def _swiglu_fwd(xy: torch.Tensor, out: torch.Tensor | None = None) -> torch.Tens
         raise ValueError(
             "SwiGLU output must have the input batch shape and a contiguous last dimension"
         )
+    if not (xy.dtype == torch.bfloat16 and nrows == 8192 and ncols == 4096):
+        from mamba_ssm.ops.triton.k_activations import _swiglu_fwd as triton_fwd
+
+        return triton_fwd(xy, out_2d).reshape(*batch_shape, ncols)
     num_threads = 512 if 512 <= ncols <= 1024 else 256
     compiled = _compile_swiglu_fwd(
         torch2cute_dtype_map[xy.dtype],
         num_threads,
-        xy.dtype == torch.bfloat16 and ncols % 2 == 0,
+        xy.dtype == torch.bfloat16 and ncols % 4 == 0,
     )
     compiled(xy.view(-1), out_2d.view(-1), nrows, ncols)
     return out_2d.reshape(*batch_shape, ncols)
