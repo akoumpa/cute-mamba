@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 42,
-    "promoted": 27
+    "present_unverified": 41,
+    "promoted": 28
   },
   "routes": [
     {
@@ -34,7 +34,7 @@
       "id": "triton.k_activations._swiglu_bwd",
       "implementation": "mamba_ssm/ops/cute/activations.py:_swiglu_bwd",
       "source": "mamba_ssm/ops/triton/k_activations.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "_swiglu_bwd"
     },
     {

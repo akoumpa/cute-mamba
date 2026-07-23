@@ -54,9 +54,10 @@ def test_swiglu_forward_backward(dtype, shape):
     torch.testing.assert_close(out_recomputed, out_ref, rtol=rtol, atol=atol)
 
 
-def test_swiglu_packed_forward_route():
+def test_swiglu_packed_routes():
     _require_cute()
-    from mamba_ssm.ops.cute.activations import _swiglu_fwd
+    from mamba_ssm.ops.cute.activations import _swiglu_bwd, _swiglu_fwd
+    from mamba_ssm.ops.triton.k_activations import _swiglu_bwd as triton_bwd
 
     torch.manual_seed(0)
     xy = torch.randn((8192, 8192), device="cuda", dtype=torch.bfloat16)
@@ -65,3 +66,9 @@ def test_swiglu_packed_forward_route():
     out = _swiglu_fwd(xy)
 
     torch.testing.assert_close(out, (F.silu(x) * y).bfloat16(), rtol=1e-2, atol=1e-2)
+    del x, y
+    dout = torch.randn_like(out)
+    dxy, out_recomputed = _swiglu_bwd(xy, dout, recompute_output=True)
+    dxy_expected, out_expected = triton_bwd(xy, dout, recompute_output=True)
+    torch.testing.assert_close(dxy, dxy_expected, rtol=2e-2, atol=2e-2)
+    torch.testing.assert_close(out_recomputed, out_expected, rtol=1e-2, atol=1e-2)

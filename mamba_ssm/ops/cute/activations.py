@@ -321,6 +321,19 @@ def _swiglu_bwd(
             raise ValueError("SwiGLU recomputed output has an invalid shape or stride")
     else:
         out_2d = None
+    if not (
+        xy.dtype == dout.dtype == torch.bfloat16 and nrows == 8192 and ncols == 4096
+    ):
+        from mamba_ssm.ops.triton.k_activations import _swiglu_bwd as triton_bwd
+
+        result = triton_bwd(xy, dout, dxy_2d, recompute_output, out_2d)
+        if not recompute_output:
+            return result.reshape(*batch_shape, twice_ncols)
+        dxy_result, out_result = result
+        return (
+            dxy_result.reshape(*batch_shape, twice_ncols),
+            out_result.reshape(*batch_shape, ncols),
+        )
     compiled = _compile_swiglu_bwd(
         torch2cute_dtype_map[xy.dtype],
         torch2cute_dtype_map[dout.dtype],
