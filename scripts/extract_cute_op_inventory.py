@@ -233,7 +233,7 @@ CUTE_ROUTES = {
         "implementation": "mamba_ssm/ops/cute/normalization.py:rmsnorm_fn_cute",
     },
     "triton.selective_state_update.selective_state_update": {
-        "status": "present_unverified",
+        "status": "promoted",
         "implementation": "mamba_ssm/ops/cute/selective_state_update.py:selective_state_update_cute",
     },
     "triton.ssd_chunk_state._chunk_cumsum_fwd": {

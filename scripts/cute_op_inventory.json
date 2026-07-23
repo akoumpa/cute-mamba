@@ -1,8 +1,8 @@
 {
   "counts": {
     "missing": 0,
-    "present_unverified": 44,
-    "promoted": 25
+    "present_unverified": 43,
+    "promoted": 26
   },
   "routes": [
     {
@@ -90,7 +90,7 @@
       "id": "triton.selective_state_update.selective_state_update",
       "implementation": "mamba_ssm/ops/cute/selective_state_update.py:selective_state_update_cute",
       "source": "mamba_ssm/ops/triton/selective_state_update.py",
-      "status": "present_unverified",
+      "status": "promoted",
       "symbol": "selective_state_update"
     },
     {

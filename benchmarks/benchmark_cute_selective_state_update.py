@@ -3,7 +3,10 @@ import argparse
 import torch
 from triton.testing import do_bench
 
-from mamba_ssm.ops.cute.selective_state_update import selective_state_update_cute
+from mamba_ssm.ops.cute.selective_state_update import (
+    _selective_state_update_cute,
+    selective_state_update_cute,
+)
 from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 
 
@@ -16,10 +19,20 @@ CASES = [
     (torch.float16, 16, 32, 64, 64, 4, True),
     (torch.bfloat16, 1, 64, 64, 128, 4, False),
     (torch.bfloat16, 16, 64, 64, 128, 4, True),
+    (torch.bfloat16, 8, 64, 64, 128, 4, True),
+    (torch.bfloat16, 32, 64, 64, 128, 4, True),
+    (torch.bfloat16, 16, 64, 64, 128, 4, False),
+    (torch.bfloat16, 16, 32, 128, 128, 4, True),
+    (torch.bfloat16, 16, 8, 512, 128, 4, True),
+    (torch.bfloat16, 16, 1, 4096, 128, 1, True),
+    (torch.bfloat16, 16, 1, 4096, 64, 1, False, False),
+    (torch.bfloat16, 16, 64, 64, 128, 4, False, False),
 ]
 
 
-def benchmark_case(dtype, batch, nheads, headdim, dstate, ngroups, indexed):
+def benchmark_case(
+    dtype, batch, nheads, headdim, dstate, ngroups, indexed, full_options=True
+):
     x_shape = (batch, nheads, headdim) if nheads > 1 else (batch, headdim)
     state_batches = batch * 4 if indexed else batch
     state_shape = (
@@ -41,21 +54,27 @@ def benchmark_case(dtype, batch, nheads, headdim, dstate, ngroups, indexed):
     D = torch.randn(vector_shape, device="cuda")
     z = torch.randn_like(x)
     dt_bias = torch.rand(vector_shape, device="cuda") - 4
-    indices = torch.arange(batch, device="cuda", dtype=torch.int32) * 3 if indexed else None
+    indices = (
+        torch.arange(batch, device="cuda", dtype=torch.int32) * 3 if indexed else None
+    )
 
-    cute_fn = lambda: selective_state_update_cute(
-        state_cute, x, dt, A, B, C, D, z, dt_bias, True, indices
-    )
-    triton_fn = lambda: selective_state_update(
-        state_triton, x, dt, A, B, C, D, z, dt_bias, True, indices
-    )
+    optional = (D, z, dt_bias, True) if full_options else (D, None, dt_bias, False)
+
+    def cute_fn():
+        return selective_state_update_cute(
+            state_cute, x, dt, A, B, C, *optional, indices
+        )
+
+    def triton_fn():
+        return selective_state_update(state_triton, x, dt, A, B, C, *optional, indices)
+
     cute_fn()
     triton_fn()
     cute_ms = do_bench(cute_fn, warmup=50, rep=300)
     triton_ms = do_bench(triton_fn, warmup=50, rep=300)
     print(
         f"dtype={dtype} batch={batch} heads={nheads} headdim={headdim} "
-        f"dstate={dstate} groups={ngroups} indexed={indexed} "
+        f"dstate={dstate} groups={ngroups} indexed={indexed} full={full_options} "
         f"speedup={triton_ms / cute_ms:.3f} cute_ms={cute_ms:.4f} triton_ms={triton_ms:.4f}",
         flush=True,
     )
@@ -71,9 +90,11 @@ if __name__ == "__main__":
         for case in CASES:
             benchmark_case(*case)
     else:
-        dtype, batch, nheads, headdim, dstate, ngroups, indexed = CASES[args.case]
+        dtype, batch, nheads, headdim, dstate, ngroups, indexed, *_ = CASES[args.case]
         x_shape = (batch, nheads, headdim) if nheads > 1 else (batch, headdim)
-        state_shape = (batch, nheads, headdim, dstate) if nheads > 1 else (batch, headdim, dstate)
+        state_shape = (
+            (batch, nheads, headdim, dstate) if nheads > 1 else (batch, headdim, dstate)
+        )
         a_shape = (nheads, headdim, dstate) if nheads > 1 else (headdim, dstate)
         bc_shape = (batch, ngroups, dstate) if nheads > 1 else (batch, dstate)
         state = torch.randn(state_shape, device="cuda", dtype=dtype)
@@ -83,6 +104,10 @@ if __name__ == "__main__":
         B = torch.randn(bc_shape, device="cuda")
         C = torch.randn_like(B)
         torch.cuda.synchronize()
-        fn = selective_state_update_cute if args.profile == "cute" else selective_state_update
+        fn = (
+            _selective_state_update_cute
+            if args.profile == "cute"
+            else selective_state_update
+        )
         fn(state, x, dt, A, B, C)
         torch.cuda.synchronize()

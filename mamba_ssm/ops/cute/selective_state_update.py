@@ -13,10 +13,17 @@ from cutlass import Float32, Int32, Int64, const_expr
 from quack.activation import silu
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
+from mamba_ssm.ops.cute.mamba3.packing import bf16x2_to_i32, i32_to_bf16x2
+
 
 _LOG2E = 1.4426950408889634
 _LN2 = 0.6931471805599453
 _NUM_THREADS = 128
+
+
+@cache
+def _is_hopper_or_newer(device_index: int) -> bool:
+    return torch.cuda.get_device_capability(device_index)[0] >= 9
 
 
 @cute.jit
@@ -46,13 +53,15 @@ def _compile_selective_state_update(
     has_dt_bias: bool,
     has_state_batch_indices: bool,
     dt_softplus: bool,
+    pack_bf16_state: bool,
 ):
     num_threads = 256 if dstate == 128 else _NUM_THREADS
     warps_per_cta = num_threads // 32
-    lanes_per_feature = min(32, max(4, dstate // 4))
+    state_values_per_lane = 4 if pack_bf16_state else 1
+    lanes_per_feature = min(32, max(4, dstate // (4 * state_values_per_lane)))
     features_per_warp = 32 // lanes_per_feature
     features_per_cta = warps_per_cta * features_per_warp
-    items_per_lane = math.ceil(dstate / lanes_per_feature)
+    items_per_lane = math.ceil(dstate / (lanes_per_feature * state_values_per_lane))
     reduction_offsets = tuple(1 << i for i in range(int(math.log2(lanes_per_feature))))
 
     class SelectiveStateUpdate:
@@ -174,24 +183,90 @@ def _compile_selective_state_update(
                     dt = cute.arch.shuffle_sync(dt, source_lane)
 
                     output = Float32(0.0)
-                    for item in cutlass.range_constexpr(items_per_lane):
-                        state_col = state_lane + item * lanes_per_feature
-                        if state_col < dstate:
-                            state_idx = state_base + state_col
-                            state = Float32(mState[state_idx])
-                            a = Float32(mA[param_idx * dstate + state_col])
-                            if const_expr(dstate >= 64):
-                                b = sB[state_col]
-                                c = sC[state_col]
-                            else:
-                                b = Float32(mB[bc_base + state_col])
-                                c = Float32(mC[bc_base + state_col])
-                            decay = cute.math.exp2(
-                                a * dt * Float32(_LOG2E), fastmath=True
+                    if const_expr(pack_bf16_state):
+                        mStatePacked = cute.recast_tensor(mState, Int32)
+                        for item in cutlass.range_constexpr(items_per_lane):
+                            state_col = (
+                                state_lane * state_values_per_lane
+                                + item * lanes_per_feature * state_values_per_lane
                             )
-                            state = state * decay + b * dt * x
-                            mState[state_idx] = state_dtype(state)
-                            output += state * c
+                            packed_state_idx = state_base + state_col
+                            state0_raw, state1_raw = i32_to_bf16x2(
+                                mStatePacked[packed_state_idx // 2]
+                            )
+                            state2_raw, state3_raw = i32_to_bf16x2(
+                                mStatePacked[packed_state_idx // 2 + 1]
+                            )
+                            state0 = Float32(state0_raw)
+                            state1 = Float32(state1_raw)
+                            state2 = Float32(state2_raw)
+                            state3 = Float32(state3_raw)
+                            a0 = Float32(mA[param_idx * dstate + state_col])
+                            a1 = Float32(mA[param_idx * dstate + state_col + 1])
+                            a2 = Float32(mA[param_idx * dstate + state_col + 2])
+                            a3 = Float32(mA[param_idx * dstate + state_col + 3])
+                            if const_expr(dstate >= 64):
+                                b0 = sB[state_col]
+                                b1 = sB[state_col + 1]
+                                b2 = sB[state_col + 2]
+                                b3 = sB[state_col + 3]
+                                c0 = sC[state_col]
+                                c1 = sC[state_col + 1]
+                                c2 = sC[state_col + 2]
+                                c3 = sC[state_col + 3]
+                            else:
+                                b0 = Float32(mB[bc_base + state_col])
+                                b1 = Float32(mB[bc_base + state_col + 1])
+                                b2 = Float32(mB[bc_base + state_col + 2])
+                                b3 = Float32(mB[bc_base + state_col + 3])
+                                c0 = Float32(mC[bc_base + state_col])
+                                c1 = Float32(mC[bc_base + state_col + 1])
+                                c2 = Float32(mC[bc_base + state_col + 2])
+                                c3 = Float32(mC[bc_base + state_col + 3])
+                            decay0 = cute.math.exp2(
+                                a0 * dt * Float32(_LOG2E), fastmath=True
+                            )
+                            decay1 = cute.math.exp2(
+                                a1 * dt * Float32(_LOG2E), fastmath=True
+                            )
+                            decay2 = cute.math.exp2(
+                                a2 * dt * Float32(_LOG2E), fastmath=True
+                            )
+                            decay3 = cute.math.exp2(
+                                a3 * dt * Float32(_LOG2E), fastmath=True
+                            )
+                            state0 = state0 * decay0 + b0 * dt * x
+                            state1 = state1 * decay1 + b1 * dt * x
+                            state2 = state2 * decay2 + b2 * dt * x
+                            state3 = state3 * decay3 + b3 * dt * x
+                            mStatePacked[packed_state_idx // 2] = bf16x2_to_i32(
+                                state_dtype(state0), state_dtype(state1)
+                            )
+                            mStatePacked[packed_state_idx // 2 + 1] = bf16x2_to_i32(
+                                state_dtype(state2), state_dtype(state3)
+                            )
+                            output += (
+                                state0 * c0 + state1 * c1 + state2 * c2 + state3 * c3
+                            )
+                    else:
+                        for item in cutlass.range_constexpr(items_per_lane):
+                            state_col = state_lane + item * lanes_per_feature
+                            if state_col < dstate:
+                                scalar_state_idx = state_base + state_col
+                                state = Float32(mState[scalar_state_idx])
+                                a = Float32(mA[param_idx * dstate + state_col])
+                                if const_expr(dstate >= 64):
+                                    b = sB[state_col]
+                                    c = sC[state_col]
+                                else:
+                                    b = Float32(mB[bc_base + state_col])
+                                    c = Float32(mC[bc_base + state_col])
+                                decay = cute.math.exp2(
+                                    a * dt * Float32(_LOG2E), fastmath=True
+                                )
+                                state = state * decay + b * dt * x
+                                mState[scalar_state_idx] = state_dtype(state)
+                                output += state * c
 
                     for offset in reduction_offsets:
                         output += cute.arch.shuffle_sync_bfly(output, offset)
@@ -234,7 +309,7 @@ def _compile_selective_state_update(
     )
 
 
-def selective_state_update_cute(
+def _selective_state_update_cute(
     state,
     x,
     dt,
@@ -312,6 +387,7 @@ def selective_state_update_cute(
         has_dt_bias=dt_bias is not None,
         has_state_batch_indices=state_batch_indices is not None,
         dt_softplus=dt_softplus,
+        pack_bf16_state=state.dtype == torch.bfloat16,
     )
     compiled(
         state.view(-1),
@@ -332,6 +408,63 @@ def selective_state_update_cute(
         state.stride(0),
     )
     return out if has_heads else out.squeeze(1)
+
+
+def selective_state_update_cute(
+    state,
+    x,
+    dt,
+    A,
+    B,
+    C,
+    D=None,
+    z=None,
+    dt_bias=None,
+    dt_softplus=False,
+    state_batch_indices=None,
+):
+    """Run the faster CuTe route and preserve the Triton API elsewhere."""
+    use_cute = (
+        _is_hopper_or_newer(state.device.index)
+        and state.dtype == torch.bfloat16
+        and state.shape[-1] == 128
+        and x.shape[0] >= 16
+        and x[0].numel() >= 4096
+        and D is not None
+        and z is not None
+        and dt_bias is not None
+        and dt_softplus
+    )
+    if use_cute:
+        return _selective_state_update_cute(
+            state,
+            x,
+            dt,
+            A,
+            B,
+            C,
+            D,
+            z,
+            dt_bias,
+            dt_softplus,
+            state_batch_indices,
+        )
+
+    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
+
+    return selective_state_update(
+        state,
+        x,
+        dt,
+        A,
+        B,
+        C,
+        D,
+        z,
+        dt_bias,
+        dt_softplus,
+        state_batch_indices,
+    )
 
 
 __all__ = ["selective_state_update_cute"]
